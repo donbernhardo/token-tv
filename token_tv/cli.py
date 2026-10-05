@@ -15,7 +15,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlparse
+from token_tv.device import device_address
 
 PROVIDERS = {
     # provider: (CLI command, default home, file the CLI writes after login, login hint)
@@ -63,16 +63,14 @@ def ask(prompt, default=''):
     return answer or default
 
 
-def device_address(text):
-    """'http://host[:port]' with the trailing slash removed, or ValueError with a fix."""
-    url = urlparse(text.strip())
-    if url.scheme not in ('http', 'https') or not url.hostname or url.path.strip('/') or url.query:
-        raise ValueError(f'{text!r} is not a clock address; use the form http://192.168.0.50')
+def validate_before_save(config):
+    from token_tv.sources import validate_config
     try:
-        url.port
-    except ValueError:
-        raise ValueError(f'{text!r} has an invalid port') from None
-    return f'{url.scheme}://{url.netloc}'
+        validate_config(config)
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        print(f'Invalid TokenTV configuration: {error}', file=sys.stderr)
+        return False
+    return True
 
 
 def setup(args):
@@ -131,6 +129,8 @@ def setup(args):
         config['device_urls'] = clean_devices
     elif len(clean_devices) > 1:
         config['device_urls'] = clean_devices
+    if not validate_before_save(config):
+        return 1
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'x') as handle:  # 'x' refuses to replace a file created meanwhile
@@ -286,13 +286,37 @@ def start(args):
             config['device_urls'] = clean_devices
         elif len(clean_devices) > 1:
             config['device_urls'] = clean_devices
+        if not validate_before_save(config):
+            return 1
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'x') as handle:
             json.dump(config, handle, indent=2)
             handle.write('\n')
         print(f'Saved {path} (emails and paths only, no secrets).')
-    if read_config(path) is None:
+    config = read_config(path)
+    if config is None:
         return 1
+    if args.device_url:
+        try:
+            devices = [device_address(item, allow_bare=True) for entry in args.device_url
+                       for item in entry.split(',') if item.strip()]
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            return 1
+        updated = dict(config, device_urls=devices)
+        updated.pop('device_url', None)
+        if len(devices) == 1:
+            updated['device_url'] = devices[0]
+        if not validate_before_save(updated):
+            return 1
+        if updated != config:
+            from token_tv.live import write_json
+            try:
+                write_json(path, updated)
+            except OSError:
+                print(f'Could not save the clock address in {path}.', file=sys.stderr)
+                return 1
+            print(f'Updated clock address in {path}.')
     if not args.no_browser:
         import threading
         import webbrowser

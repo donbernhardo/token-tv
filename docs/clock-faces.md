@@ -2,6 +2,9 @@
 
 A clock face is one Python function that turns a usage snapshot into a 240×240 picture.
 The clock only ever receives that picture.
+Faces still receive at most three provider rows. When four services are configured, TokenTV
+alternates pages every ten seconds before calling your render function. `render_page(data, 0)`
+and `render_page(data, 1)` preview each page; `render_page(data, None)` follows the live rotation.
 
 ## 1. Try a face without touching the code
 

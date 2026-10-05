@@ -6,7 +6,7 @@ const THEMES = [
  {id:'retro', name:'Pixel Retro', eyebrow:'', title:'AI PROVIDERS', note:'USAGE DASHBOARD'},
  {id:'hud', name:'Sci-Fi HUD', eyebrow:'', title:'AI PROVIDER USAGE', note:'Real-time usage monitor'}
 ];
-const STATUS = {ok:'Connected', loading:'Loading', auth_required:'Login needed', identity_mismatch:'Check identity', quota_unavailable:'Quota unavailable', stale:'OLD · Previous value', rate_limited:'Retry later', error:'Fetch failed'};
+const STATUS = {ok:'Connected', loading:'Loading', auth_required:'Login needed', identity_mismatch:'Check identity', identity_unavailable:'Identity unavailable', quota_unavailable:'Quota unavailable', stale:'OLD · Previous value', rate_limited:'Retry later', error:'Fetch failed'};
 const PROVIDERS = ['claude', 'codex', 'grok', 'gemini'];
 const COMPANIES = {claude:'ANTHROPIC', codex:'OPENAI', grok:'XAI', gemini:'GOOGLE'};
 const svgNS = 'http://www.w3.org/2000/svg';
@@ -269,7 +269,8 @@ function paintClock(forceImage = false) {
  } else if (targetList) {
   targetList.hidden = true;
  }
- if (style && !$('#clock-panel').hidden && (forceImage || style !== lastImageStyle || Date.now() - lastImageAt > 30000)) {lastImageStyle = style; lastImageAt = Date.now(); $('#frame').src = DEMO ? displayInfo.frames?.[style] || `/frames/${encodeURIComponent(style)}.jpg` : '/frame/0.jpg?style=' + encodeURIComponent(style) + '&t=' + lastImageAt; $('#frame').alt = styleName(style) + ' live clock preview'}
+ const imageInterval = displayInfo?.page_count > 1 ? 5000 : 30000;
+ if (style && !$('#clock-panel').hidden && (forceImage || style !== lastImageStyle || Date.now() - lastImageAt >= imageInterval)) {lastImageStyle = style; lastImageAt = Date.now(); $('#frame').src = DEMO ? displayInfo.frames?.[style] || `/frames/${encodeURIComponent(style)}.jpg` : '/frame/0.jpg?style=' + encodeURIComponent(style) + '&t=' + lastImageAt; $('#frame').alt = styleName(style) + ' live clock preview'}
 }
 const styleName = s => s === 'retro' ? 'Pixel Retro' : s === 'hud' ? 'Sci-Fi HUD' : s ? s[0].toUpperCase() + s.slice(1) : 'Unknown';
 let displayPolling = false;

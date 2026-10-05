@@ -143,7 +143,7 @@ class LiveTests(unittest.TestCase):
         store.refresh()
         one = store.snapshot()
         two = store.snapshot()
-        self.assertEqual(calls, ["a", "b"])
+        self.assertCountEqual(calls, ["a", "b"])
         self.assertEqual(one, two)
         self.assertEqual(one["accounts"]["a"]["windows"][0]["used_percent"], 31)
         self.assertEqual(one["accounts"]["b"]["windows"], [])
@@ -154,6 +154,90 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(row["windows"][0]["used_percent"], 31)
         self.assertEqual(row["last_success_at"], 100)
         self.assertEqual(row["error_code"], "error")
+
+    def test_gemini_requires_a_matching_identity_before_fetching_usage(self):
+        account = {'key': 'g', 'alias': 'GEMINI A', 'provider': 'gemini', 'email': 'owner@example.com'}
+        for identity, status in ((None, 'identity_unavailable'), ('other@example.com', 'identity_mismatch'),
+                                 ('owner@example.com', 'ok')):
+            with self.subTest(identity=identity), patch('token_tv.sources.gemini_identity', return_value=identity), \
+                    patch('token_tv.sources.gemini_payload', return_value={'buckets': [{'window': '5h', 'used_percent': 42}]}) as usage:
+                row = fetch_account(account)
+                self.assertEqual(row['status'], status)
+                self.assertEqual(row['identity_verified'], status == 'ok')
+                if status != 'ok':
+                    usage.assert_not_called()
+                    self.assertEqual(row['windows'], [])
+
+    def test_gemini_rejects_invalid_numbers_and_preserves_zero(self):
+        for value in (True, False, float('nan'), float('inf'), -float('inf'), None, '0', -0.1, 1.1):
+            for data in ({'buckets': [{'window': '5h', 'remaining_fraction': value}]},
+                         {'five_hour': {'remaining_fraction': value}}):
+                with self.subTest(value=value, data=data):
+                    self.assertEqual(normalize_gemini(data), [])
+        for field in ('used_percent', 'utilization'):
+            for value in (True, False, float('nan'), float('inf')):
+                self.assertEqual(normalize_gemini({'buckets': [{'window': '5h', field: value}]}), [])
+                self.assertEqual(normalize_gemini({'five_hour': {field: value}}), [])
+            self.assertEqual(normalize_gemini({'five_hour': {field: 0}})[0]['used_percent'], 0)
+        self.assertEqual(normalize_gemini({'five_hour': {'utilization': 0, 'used_percent': 99}})[0]['used_percent'], 0)
+        for remaining, used in ((0, 100), (1, 0), (0.75, 25)):
+            self.assertEqual(normalize_gemini({'buckets': [{'window': '5h', 'remaining_fraction': remaining}]})[0]['used_percent'], used)
+
+    def test_malformed_provider_response_is_an_account_error(self):
+        account = {'key': 'a', 'alias': 'A', 'provider': 'claude', 'email': 'a@example.com'}
+        with patch('token_tv.sources.claude_payload', return_value=({'email': 'a@example.com'}, {'five_hour': 'unexpected'})):
+            row = fetch_account(account)
+        self.assertEqual(row['status'], 'error')
+        self.assertEqual(row['windows'], [])
+
+    def test_unexpected_account_failure_does_not_discard_healthy_updates(self):
+        accounts = [{'key': key, 'alias': key.upper(), 'provider': 'claude'} for key in ('a', 'b')]
+        fail = False
+        def fetch(account):
+            if fail and account['key'] == 'a':
+                raise AttributeError('DO-NOT-EXPORT')
+            return dict(account, status='ok', windows=[{'label': '5H', 'used_percent': 42 if fail else 20}],
+                        fetched_at=time.time(), identity_verified=True)
+        store = UsageStore(accounts, fetch=fetch)
+        store.refresh()
+        fail = True
+        store.refresh()
+        data = store.snapshot()
+        self.assertEqual(data['accounts']['a']['status'], 'stale')
+        self.assertEqual(data['accounts']['a']['windows'][0]['used_percent'], 20)
+        self.assertEqual(data['accounts']['b']['status'], 'ok')
+        self.assertEqual(data['accounts']['b']['windows'][0]['used_percent'], 42)
+        self.assertNotIn('DO-NOT-EXPORT', json.dumps(data))
+
+    def test_four_providers_rotate_without_losing_gemini(self):
+        data = {'accounts': {provider: {'key': provider, 'alias': provider.upper() + ' A', 'provider': provider,
+                                       'status': 'ok', 'windows': [{'label': '5H', 'used_percent': 42}]}
+                             for provider in ('claude', 'codex', 'grok', 'gemini')}}
+        self.assertEqual([[r['provider'] for r in rows] for _, rows in pages(data)],
+                         [['claude', 'codex', 'grok'], ['gemini']])
+        from token_tv.display import STYLES
+        for style in STYLES:
+            with self.subTest(style=style):
+                with patch('token_tv.display.time.time', return_value=0):
+                    first = render_page(data, 0, style)
+                with patch('token_tv.display.time.time', return_value=10):
+                    second = render_page(data, 1, style)
+                self.assertNotEqual(first, second)
+                for frame in (first, second):
+                    self.assertEqual(Image.open(io.BytesIO(frame)).size, (240, 240))
+                with patch('token_tv.display.time.time', return_value=0):
+                    self.assertEqual(render_page(data, None, style), first)
+                with patch('token_tv.display.time.time', return_value=10):
+                    self.assertEqual(render_page(data, None, style), second)
+
+    def test_normalizers_validate_provider_response_shapes(self):
+        for normalize, malformed in ((normalize_claude, {'five_hour': 'bad'}),
+                                     (normalize_codex, {'rateLimits': {'primary': []}}),
+                                     (normalize_grok, {'config': []}),
+                                     (normalize_gemini, {'buckets': [False]})):
+            with self.subTest(normalizer=normalize.__name__):
+                with self.assertRaises(ValueError):
+                    normalize(malformed)
 
     def test_wrong_identity_does_not_reuse_previous_account_values(self):
         account = {"key": "a", "alias": "A", "provider": "claude"}
@@ -240,10 +324,10 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(t2[1]["style"], "retro")
         self.assertEqual(t2[1]["name"], "Office")
 
-        with tempfile.NamedTemporaryFile("w") as tf:
-            tf.write(json.dumps(c2))
-            tf.flush()
-            prefs = DisplayPreferences(tf.name, c2)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(c2))
+            prefs = DisplayPreferences(path, c2)
             snap = prefs.snapshot()
             self.assertEqual(len(snap["targets"]), 2)
             self.assertEqual(snap["status"], "queued")
@@ -269,10 +353,10 @@ class LiveTests(unittest.TestCase):
                 {"url": "http://10.0.0.129", "style": "retro", "name": "Desk 2"},
             ],
         }
-        with tempfile.NamedTemporaryFile("w") as tf:
-            tf.write(json.dumps(config))
-            tf.flush()
-            prefs = DisplayPreferences(tf.name, config)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(config))
+            prefs = DisplayPreferences(path, config)
             targets = normalize_device_targets(config)
             dev1 = PhotoDisplay("http://10.0.0.128")
             dev2 = PhotoDisplay("http://10.0.0.129")
@@ -297,4 +381,3 @@ class LiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

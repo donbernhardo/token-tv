@@ -1,6 +1,7 @@
 """Confirmed SD_PRO photo API. Never flash or delete existing photographs."""
 import json
 import uuid
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
@@ -11,12 +12,29 @@ LIMITS = {"tokentv.jpg": (60000, "image/jpeg"), "tokentv.gif": (400000, "image/g
 LEGACY_FILES = ("tokentv-c.jpg", "tokentv-m.jpg")
 
 
+def device_address(text, allow_bare=False):
+    """Validate the HTTP address understood by the stock firmware."""
+    if not isinstance(text, str):
+        raise ValueError("A plain HTTP clock address is required")
+    url = text.strip()
+    if allow_bare and not url.startswith(('http://', 'https://')):
+        url = 'http://' + url
+    parsed = urlparse(url)
+    if (parsed.scheme != 'http' or not parsed.hostname or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment
+            or parsed.path not in ('', '/')):
+        raise ValueError("A plain HTTP clock address is required, e.g. http://192.168.0.50")
+    try:
+        if parsed.port == 0:
+            raise ValueError
+    except ValueError:
+        raise ValueError("The clock address has an invalid port") from None
+    return url.rstrip('/')
+
+
 class PhotoDisplay:
     def __init__(self, base_url):
-        parsed = urlparse(base_url)
-        if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.path not in ("", "/"):
-            raise ValueError("A plain local display URL is required")
-        self.base_url = base_url.rstrip("/")
+        self.base_url = device_address(base_url)
         self._kind = None
 
     def request(self, path, data=None, headers=None):
@@ -33,72 +51,57 @@ class PhotoDisplay:
             return False
 
     def _detect(self):
-        if self._kind is not None:
-            return self._kind
-        try:
-            status, raw = self.request("/theme/list")
-            if status == 200:
-                themes = json.loads(raw)
-                if isinstance(themes, dict) and "themes" in themes:
-                    self._kind = "sd_pro"
-                    return self._kind
-        except Exception:
-            pass
-        self._kind = "geekmagic"
+        if self._kind is None:
+            self.capture()
         return self._kind
 
     def capture(self):
+        """Read a complete original state; never substitute guessed settings."""
         try:
-            status, raw = self.request("/theme/list")
-            if status == 200:
-                themes = json.loads(raw)
-                if isinstance(themes, dict) and "themes" in themes:
-                    self._kind = "sd_pro"
-                    _, praw = self.request("/photo/list")
-                    photos = json.loads(praw)
-                    if not any(t["id"] == 2 for t in themes["themes"]):
-                        raise ValueError("The confirmed photo theme is missing")
-                    return {"device_kind": "sd_pro", "themes": themes["themes"], "theme_interval": themes["interval"],
-                            "files": [{"name": f["name"], "enabled": f["enabled"]} for f in photos["files"]],
-                            "photo_interval": photos["interval"]}
-        except (ValueError, KeyError):
-            raise
-        except Exception:
-            pass
+            _, raw = self.request("/theme/list")
+        except HTTPError as error:
+            if error.code != 404:
+                raise
+            error.close()
+        else:
+            themes = json.loads(raw)
+            if not isinstance(themes, dict) or not isinstance(themes.get('themes'), list):
+                raise ValueError("Unrecognized display firmware")
+            _, praw = self.request("/photo/list")
+            photos = json.loads(praw)
+            if not isinstance(photos, dict) or not isinstance(photos.get('files'), list):
+                raise ValueError("Invalid photo state")
+            if (any(not isinstance(t, dict) or type(t.get('id')) is not int or type(t.get('enabled')) is not bool
+                    for t in themes['themes'])
+                    or any(not isinstance(f, dict) or not isinstance(f.get('name'), str)
+                           or type(f.get('enabled')) is not bool for f in photos['files'])
+                    or any(type(data.get('interval')) is not int or data['interval'] <= 0
+                           for data in (themes, photos))):
+                raise ValueError("Incomplete display settings")
+            if not any(t["id"] == 2 for t in themes["themes"]):
+                raise ValueError("The confirmed photo theme is missing")
+            original = {"device_kind": "sd_pro", "themes": themes["themes"], "theme_interval": themes["interval"],
+                        "files": [{"name": f["name"], "enabled": f["enabled"]} for f in photos["files"]],
+                        "photo_interval": photos["interval"]}
+            self._kind = "sd_pro"
+            return original
 
-        self._kind = "geekmagic"
-        theme = 3
-        try:
-            _, raw = self.request("/app.json")
-            theme = json.loads(raw).get("theme", 3)
-        except Exception:
-            pass
-        autoplay = 0
-        interval = 5
-        try:
-            _, raw = self.request("/album.json")
+        def read(path):
+            _, raw = self.request(path)
             data = json.loads(raw)
-            autoplay = data.get("autoplay", 0)
-            interval = data.get("i_i", 5)
-        except Exception:
-            pass
-        img = ""
-        try:
-            _, raw = self.request("/img.json")
-            img = json.loads(raw).get("img", "")
-        except Exception:
-            pass
-        return {
-            "device_kind": "geekmagic",
-            "theme": theme,
-            "autoplay": autoplay,
-            "i_i": interval,
-            "img": img,
-            "themes": [{"id": 3, "enabled": True}],
-            "files": [{"name": FILES[0], "enabled": True}],
-            "photo_interval": interval,
-            "theme_interval": interval,
-        }
+            if not isinstance(data, dict):
+                raise ValueError("Invalid display state")
+            return data
+
+        app, album, image = read('/app.json'), read('/album.json'), read('/img.json')
+        original = {"device_kind": "geekmagic", "theme": app['theme'],
+                    "autoplay": album['autoplay'], "i_i": album['i_i'], "img": image['img']}
+        if (any(type(original[k]) is not int for k in ('theme', 'autoplay', 'i_i'))
+                or original['theme'] < 0 or original['autoplay'] not in (0, 1) or original['i_i'] <= 0
+                or not isinstance(original['img'], str)):
+            raise ValueError("Invalid display settings")
+        self._kind = "geekmagic"
+        return original
 
     def upload(self, name, image):
         limit, mime = LIMITS.get(name, (0, ""))

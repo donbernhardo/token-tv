@@ -27,8 +27,9 @@ STYLES = ('pixel', 'digital', 'neon', 'retro', 'hud', 'space')
 # Gauge-only levels; labels/percentages always use TEXT, logos retain provider ink.
 GAUGE_LEVELS = ((50, '#76a99a'), (80, '#93c9b9'), (90, '#d1b275'), (101, '#d8877e'))
 STATUS = {'loading': 'WAIT', 'auth_required': 'LOGIN', 'identity_mismatch': 'CHECK',
-          'quota_unavailable': 'NO DATA', 'error': 'ERROR', 'rate_limited': 'RETRY', 'stale': 'OLD'}
+          'identity_unavailable': 'CHECK', 'quota_unavailable': 'NO DATA', 'error': 'ERROR', 'rate_limited': 'RETRY', 'stale': 'OLD'}
 PROVIDERS = ('claude', 'codex', 'grok', 'gemini')
+PAGE_SECONDS = 10
 ASSETS = Path(__file__).with_name('assets')
 
 
@@ -43,7 +44,7 @@ def font(size, bold=False, mono=False):
     return ImageFont.load_default()
 
 
-def overview_rows(snapshot):
+def overview_rows(snapshot, page=0):
     """Select one visible account per provider, in configured order, without merging quotas."""
     rows = []
     # Show only the services this person set up; with no accounts at all, keep every placeholder row.
@@ -56,7 +57,8 @@ def overview_rows(snapshot):
         rows.append((available or previous or accounts or [
             {'key': provider, 'provider': provider, 'alias': provider.upper() + ' A',
              'status': 'auth_required', 'windows': []}])[0])
-    return rows[:3]  # every clock face is laid out for at most three rows
+    start = (page % max(1, math.ceil(len(rows) / 3))) * 3
+    return rows[start:start + 3]
 
 
 def row_shift(count, pitch):
@@ -65,7 +67,10 @@ def row_shift(count, pitch):
 
 
 def pages(snapshot):
-    return [('OVERVIEW', overview_rows(snapshot))]
+    providers = {row['provider'] for row in snapshot['accounts'].values()} or set(PROVIDERS)
+    count = max(1, math.ceil(len(providers) / 3))
+    return [('OVERVIEW' if count == 1 else f'OVERVIEW {page + 1}/{count}', overview_rows(snapshot, page))
+            for page in range(count)]
 
 
 def primary_window(row):
@@ -229,11 +234,15 @@ def render_pixel(snapshot):
 
 
 def render_page(snapshot, page=0, style='pixel'):
-    # Keep the former second-frame URL usable while publishing only one LCD image.
-    if page not in (0, 1):
+    # An explicit page is stable; None follows the live clock's rotating pages.
+    if page not in (None, 0, 1):
         raise IndexError('Unknown frame')
     if style not in STYLES:
         raise ValueError('Unknown display style')
+    if page is None:
+        page = int(time.time() // PAGE_SECONDS) % len(pages(snapshot))
+    rows = overview_rows(snapshot, page)
+    snapshot = dict(snapshot, accounts={row['key']: row for row in rows})
     if style == 'space':  # animated: returns GIF bytes
         from token_tv.space import render_space
         return render_space(snapshot)

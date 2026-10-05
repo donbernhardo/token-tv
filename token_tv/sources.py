@@ -25,6 +25,7 @@ from token_tv.usage import (
     window,
 )
 from token_tv.display import STYLES
+from token_tv.device import device_address
 
 
 def exe(name):
@@ -146,12 +147,7 @@ def normalize_device_targets(config):
 
         if not url:
             continue
-        if not (url.startswith("http://") or url.startswith("https://")):
-            url = "http://" + url
-        parsed = urlparse(url)
-        if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.path not in ("", "/"):
-            raise ValueError(f"A plain local display URL is required: {url}")
-        clean_url = url.rstrip("/")
+        clean_url = device_address(url, allow_bare=True)
         if clean_url in seen:
             continue
         seen.add(clean_url)
@@ -159,13 +155,18 @@ def normalize_device_targets(config):
             "url": clean_url,
             "style": item_style or global_style,
             "configured_style": item_style,
-            "name": name or parsed.hostname,
+            "name": name or urlparse(clean_url).hostname,
         })
     return targets
 
 
 def load_config(path):
-    data = json.loads(Path(path).read_text())
+    return validate_config(json.loads(Path(path).read_text()))
+
+
+def validate_config(data):
+    if not isinstance(data, dict) or not isinstance(data.get('accounts'), list):
+        raise ValueError("Configuration needs an accounts list")
     if set(data) - {"accounts", "device_url", "device_urls", "poll_seconds", "font", "display_style"}:
         raise ValueError("Unsupported configuration field")
     if data.get('display_style', 'pixel') not in STYLES:
@@ -174,6 +175,8 @@ def load_config(path):
     seen = set()
     allowed = {"key", "alias", "provider", "source_home", "email", "snapshot_file", "fallback_snapshot_file", "refresh_with_cli"}
     for account in data.get("accounts", []):
+        if not isinstance(account, dict):
+            raise ValueError("Each account must be an object")
         if set(account) - allowed:
             raise ValueError("Only credential-free account metadata is allowed")
         if account.get("provider") not in ("claude", "codex", "grok", "gemini"):
@@ -183,7 +186,7 @@ def load_config(path):
             raise ValueError("Account keys must be unique")
         if not isinstance(account.get("alias"), str) or not 1 <= len(account["alias"]) <= 32:
             raise ValueError("Account alias is required")
-        if not account.get("email"):
+        if not isinstance(account.get("email"), str) or not account['email'].strip():
             raise ValueError("Expected account identity is required")
         seen.add(key)
     if not seen:
@@ -390,7 +393,7 @@ def imported_row(account):
     fetched = timestamp(row.get("fetched_at"))
     if fetched is None or fetched > time.time() + 60:
         raise SourceError("invalid_snapshot")
-    allowed_status = {"ok", "quota_unavailable", "auth_required", "identity_mismatch", "error", "rate_limited", "stale"}
+    allowed_status = {"ok", "quota_unavailable", "auth_required", "identity_mismatch", "identity_unavailable", "error", "rate_limited", "stale"}
     if row.get("status") not in allowed_status:
         raise SourceError("invalid_snapshot")
     clean = {"key": account["key"], "alias": account["alias"], "provider": account["provider"],
@@ -436,11 +439,13 @@ def fetch_account(account):
             row["identity_verified"] = True
         elif account["provider"] == "gemini":
             identity = gemini_identity(account)
-            if identity and not identity_matches(account["email"], identity):
+            if not identity:
+                raise SourceError("identity_unavailable")
+            if not identity_matches(account["email"], identity):
                 raise SourceError("identity_mismatch")
             data = gemini_payload(account)
             row["windows"] = normalize_gemini(data)
-            row["identity_verified"] = bool(identity or row["windows"])
+            row["identity_verified"] = True
         else:
             if not identity_matches(account["email"], grok_identity(account)):
                 raise SourceError("identity_mismatch")
@@ -449,14 +454,14 @@ def fetch_account(account):
             row["identity_verified"] = True
         row["status"] = "ok" if row["windows"] else "quota_unavailable"
     except SourceError as error:
-        row["status"] = error.code if error.code in {"auth_required", "identity_mismatch", "stale"} else "error"
+        row["status"] = error.code if error.code in {"auth_required", "identity_mismatch", "identity_unavailable", "stale"} else "error"
         row["error_code"] = error.code
     except HTTPError as error:
         row["status"] = {401: "auth_required", 403: "auth_required", 429: "rate_limited"}.get(error.code, "error")
         row["error_code"] = "http_" + str(error.code)
     except FileNotFoundError:
         row["status"] = "auth_required"
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
         row["status"] = "error"
         row["error_code"] = "source_unavailable"
     row["fetched_at"] = time.time()

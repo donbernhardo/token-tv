@@ -27,10 +27,27 @@ def window(label, percent, reset=None, duration=None):
             "resets_at": timestamp(reset), "duration_minutes": duration}
 
 
+def object_value(value):
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("Expected a usage object")
+    return value
+
+
+def list_value(value):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Expected a usage list")
+    return value
+
+
 def normalize_claude(data):
+    data = object_value(data)
     result = []
     for key, label, duration in (("five_hour", "5H", 300), ("seven_day", "WEEK", 10080)):
-        value = data.get(key) or {}
+        value = object_value(data.get(key))
         item = window(label, value.get("utilization"), value.get("resets_at"), duration)
         if item:
             result.append(item)
@@ -38,10 +55,11 @@ def normalize_claude(data):
 
 
 def normalize_codex(data):
+    data = object_value(data)
     result = []
-    limits = data.get("rateLimits") or {}
+    limits = object_value(data.get("rateLimits"))
     for key in ("primary", "secondary"):
-        value = limits.get(key) or {}
+        value = object_value(limits.get(key))
         duration = value.get("windowDurationMins")
         if not isinstance(duration, int) or isinstance(duration, bool) or duration <= 0:
             duration = None
@@ -60,7 +78,7 @@ def extract_codex_banked_resets(data):
     count = credits_obj.get("availableCount")
     if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
         return None
-    credits_list = credits_obj.get("credits") or []
+    credits_list = list_value(credits_obj.get("credits"))
     expires_list = []
     for c in credits_list:
         if isinstance(c, dict):
@@ -77,47 +95,51 @@ def extract_codex_banked_resets(data):
 
 
 def normalize_grok(data):
-    config = data.get("config") or {}
+    data = object_value(data)
+    config = object_value(data.get("config"))
     percent = config.get("creditUsagePercent")
-    cycle = config.get("currentPeriod") or {}
+    cycle = object_value(config.get("currentPeriod"))
     reset = cycle.get("end") or config.get("billingPeriodEnd")
     item = window("BUDGET", percent, reset)
     if item:
         return [item]
     # CLI credits are a billing budget, not a fabricated web-message quota.
-    limit = (data.get("monthlyLimit") or {}).get("val")
-    used = ((data.get("usage") or {}).get("includedUsed") or {}).get("val")
+    limit = object_value(data.get("monthlyLimit")).get("val")
+    used = object_value(object_value(data.get("usage")).get("includedUsed")).get("val")
     if isinstance(limit, (int, float)) and limit > 0 and isinstance(used, (int, float)):
         item = window("BUDGET", used / limit * 100,
-                      (data.get("billingCycle") or {}).get("billingPeriodEnd"))
+                      object_value(data.get("billingCycle")).get("billingPeriodEnd"))
         if item:
             return [item]
     return []
 
 
 def normalize_gemini(data):
+    data = {'response': data} if isinstance(data, str) else object_value(data)
     result = []
     # 1. Structure from agy command usage data:
     buckets = []
-    cmd_data = (data.get("command") or {}).get("data") or {}
-    groups = cmd_data.get("groups") or data.get("groups") or []
+    cmd_data = object_value(object_value(data.get("command")).get("data"))
+    groups = list_value(cmd_data.get("groups") if cmd_data.get("groups") is not None else data.get("groups"))
     for group in groups:
+        group = object_value(group)
         if "gemini" in group.get("name", "").lower():
-            buckets.extend(group.get("buckets", []))
+            buckets.extend(list_value(group.get("buckets")))
     if not buckets and "buckets" in data:
-        buckets = data["buckets"]
+        buckets = list_value(data["buckets"])
 
     for b in buckets:
+        b = object_value(b)
         win = b.get("window")
         label = "5H" if win == "5h" else "WEEK" if win in ("weekly", "7d") else "WINDOW"
         duration = 300 if label == "5H" else 10080 if label == "WEEK" else None
         used = None
-        if "remaining_fraction" in b and isinstance(b["remaining_fraction"], (int, float)):
-            used = max(0.0, min(100.0, round((1.0 - float(b["remaining_fraction"])) * 100.0, 1)))
-        elif "used_percent" in b and isinstance(b["used_percent"], (int, float)):
-            used = float(b["used_percent"])
-        elif "utilization" in b and isinstance(b["utilization"], (int, float)):
-            used = float(b["utilization"])
+        if "remaining_fraction" in b:
+            used = used_from_remaining(b["remaining_fraction"])
+        elif "used_percent" in b:
+            used = b["used_percent"]
+        elif "utilization" in b:
+            used = b["utilization"]
         item = window(label, used, b.get("reset_time") or b.get("resets_at"), duration)
         if item:
             result.append(item)
@@ -128,10 +150,12 @@ def normalize_gemini(data):
 
     # 2. Direct dictionary keys:
     for key, label, duration in (("five_hour", "5H", 300), ("seven_day", "WEEK", 10080), ("weekly", "WEEK", 10080)):
-        val = data.get(key) or {}
-        used = val.get("utilization") or val.get("used_percent")
-        if used is None and "remaining_fraction" in val and isinstance(val["remaining_fraction"], (int, float)):
-            used = max(0.0, min(100.0, round((1.0 - float(val["remaining_fraction"])) * 100.0, 1)))
+        val = object_value(data.get(key))
+        used = val.get("utilization")
+        if used is None:
+            used = val.get("used_percent")
+        if used is None and "remaining_fraction" in val:
+            used = used_from_remaining(val["remaining_fraction"])
         item = window(label, used, val.get("resets_at") or val.get("reset_time"), duration)
         if item:
             result.append(item)
@@ -160,3 +184,11 @@ def normalize_gemini(data):
             return result
 
     return []
+
+
+def used_from_remaining(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or not 0 <= value <= 1:
+        return None
+    return round((1.0 - value) * 100.0, 1)

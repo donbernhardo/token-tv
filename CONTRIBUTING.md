@@ -16,6 +16,9 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/python -B -m unittest discover -s tests
 ```
 
+GitHub Actions runs the tests and sample renders on Linux, macOS and Windows with Python
+3.10 through 3.14. These checks use synthetic data and do not contact providers or clocks.
+
 ## Ground rules
 
 - Never put passwords, tokens, cookies, `.credentials.json`, `auth.json` or real config files

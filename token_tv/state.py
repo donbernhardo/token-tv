@@ -19,8 +19,17 @@ class UsageStore:
                      for a in accounts}
 
     def refresh(self):
+        def fetch_safely(account):
+            try:
+                return self.fetch(account)
+            except Exception:
+                # Account failures must not discard healthy results or expose exception text.
+                return {"key": account["key"], "alias": account["alias"], "provider": account["provider"],
+                        "status": "error", "error_code": "source_unavailable", "windows": [],
+                        "fetched_at": time.time(), "identity_verified": False, "source": "mini"}
+
         with ThreadPoolExecutor(max_workers=min(4, len(self.accounts))) as executor:
-            rows = list(executor.map(self.fetch, self.accounts))
+            rows = list(executor.map(fetch_safely, self.accounts))
         with self.lock:
             for row in rows:
                 previous = self.rows[row["key"]]

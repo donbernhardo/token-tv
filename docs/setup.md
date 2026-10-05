@@ -30,6 +30,8 @@ gives the same `token-tv` command.
 Pick one under **Clock display** in the dashboard, then press **Apply to clock**. Space is an animated
 GIF that the stock photo album plays. A picture is uploaded again only when the rendered image differs
 from the last upload, for example a new percentage or the Space animation that changes every 30 minutes.
+With four configured services, the clock alternates between two pages every ten seconds so Gemini
+also appears. Each page shows up to three services; provider usage is still polled every five minutes.
 </details>
 
 ## Make it yours
@@ -67,6 +69,7 @@ See [docs/hardware-compatibility.md](hardware-compatibility.md) for what is veri
 | Claude | Claude Code CLI's own OAuth login (profile and usage) | Share of the 5-hour and weekly limits **used** |
 | Codex | Official `codex app-server` account and rate-limit RPC | Share of each reported window **used** |
 | Grok | Grok CLI billing RPC (experimental) | Share of the CLI **billing budget**, not web chat limits |
+| Gemini | `agy` usage output (experimental), with a matching account email required | Share of each reported quota window **used** |
 
 Every login is checked against the email you configured. The clock gets only a picture,
 never a password, token or cookie. Polling runs every five minutes; old readings say OLD and
@@ -98,6 +101,11 @@ but its layout on a HYTE Y70 display has not been tested. There is no Apple Watc
 - The config holds aliases, emails and CLI home paths only. Never put passwords, API keys or
   tokens in it.
 - Add `"device_url": "http://<clock-ip>"` to drive the clock.
+- `token-tv start --device-url <clock-ip>` also updates an existing config's clock address. Repeat the
+  flag or separate addresses with commas for multiple clocks. Stock firmware uses HTTP; HTTPS
+  addresses are rejected before saving.
+- TokenTV captures the original display settings before changing the clock. If those settings cannot
+  be read, it reports a backup error and leaves the display alone; restore never relies on guessed settings.
 - To give the clock back its original photo and theme, stop TokenTV and run
   `token-tv run --restore-display`.
 - **macOS (untested on a real Mac):** Claude Code keeps its login in the Keychain, so TokenTV

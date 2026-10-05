@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from token_tv.device import FILES, PhotoDisplay
 from token_tv.catalog import payload as theme_payload
-from token_tv.display import STYLES, render_page
+from token_tv.display import PAGE_SECONDS, STYLES, pages, render_page
 from token_tv.web_assets import HTML, ASSETS, asset
 from token_tv.sources import load_config, normalize_device_targets
 from token_tv.state import UsageStore
@@ -117,6 +117,8 @@ def handler(store, preferences=None):
             path = url.path
             snapshot = store.snapshot()
             display = preferences.snapshot() if preferences else {'style': 'pixel', 'status': 'preview_only', 'styles': list(STYLES)}
+            display['page_count'] = len(pages(snapshot))
+            display['page_seconds'] = PAGE_SECONDS
             snapshot['display'] = display
             content_type = "application/json; charset=utf-8"
             if path == "/":
@@ -133,7 +135,7 @@ def handler(store, preferences=None):
                 if style not in STYLES:
                     self.send_error(400, 'Unknown display style')
                     return
-                body = render_page(snapshot, int(path[7]), style)
+                body = render_page(snapshot, None if path[7] == '0' else 1, style)
                 content_type = "image/gif" if body[:4] == b"GIF8" else "image/jpeg"
             elif path == '/themes':
                 body = json.dumps(theme_payload()).encode()
@@ -260,7 +262,7 @@ def main():
                         backups[url] = orig
 
                     phase = "upload"
-                    image = render_page(snapshot, 0, target_style)
+                    image = render_page(snapshot, None, target_style)
                     name = FILES[1] if image[:4] == b"GIF8" else FILES[0]
                     digest = hashlib.sha256(image).hexdigest()
                     if (name, digest) != last_uploads.get(url):
@@ -273,7 +275,7 @@ def main():
                         active_files[url] = name
                     preferences.update_target(url, "ok", applied_style=target_style)
                     all_receipts.append({"url": url, "style": target_style, "status": "ok", "uploads": receipts})
-                except (OSError, ValueError, KeyError) as error:
+                except (OSError, ValueError, KeyError, TypeError) as error:
                     preferences.update_target(url, "error")
                     all_receipts.append({"url": url, "style": target_style, "status": "error", "phase": phase,
                                          "uploads": receipts, "http_status": getattr(error, "code", None)})
@@ -301,7 +303,10 @@ def main():
                 print("TokenTV poll failed; retained previous snapshot.", flush=True)
             if refresh:
                 next_refresh = time.monotonic() + interval
-            preferences.changed.wait(max(0, next_refresh - time.monotonic()))
+            wait = max(0, next_refresh - time.monotonic())
+            if targets and len(pages(store.snapshot())) > 1:
+                wait = min(wait, PAGE_SECONDS - time.time() % PAGE_SECONDS)
+            preferences.changed.wait(wait)
 
     thread = threading.Thread(target=poll, daemon=True)
     thread.start()

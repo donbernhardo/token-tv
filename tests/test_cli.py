@@ -20,7 +20,9 @@ def run(*argv):
 
 class CliTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.tmp = Path(temporary.name)
         self.config = self.tmp / 'config.json'
 
     def test_setup_writes_metadata_only_and_never_overwrites(self):
@@ -105,7 +107,8 @@ class CliTest(unittest.TestCase):
         self.assertNotEqual(json.loads(self.config.read_text())['accounts'][0]['source_home'], '~/.claude')
 
     def test_bad_clock_address_is_rejected_before_writing(self):
-        for bad in ('192.168.0.50', 'ftp://clock', 'http://', 'http://clock/photo', 'http://clock:99999'):
+        for bad in ('192.168.0.50', 'ftp://clock', 'http://', 'http://clock/photo', 'http://clock:99999',
+                    'https://clock', 'http://user:pass@clock', 'http://clock/#fragment', 'http://clock:0'):
             code, _, err = run('setup', '--config', str(self.config), '--yes',
                                '--claude-email', 'a@example.com', '--device-url', bad)
             self.assertEqual(code, 1, bad)
@@ -116,6 +119,12 @@ class CliTest(unittest.TestCase):
         code, _, err = run('doctor', '--config', str(self.config))
         self.assertEqual(code, 1)
         self.assertIn('token-tv setup', err)
+
+    def test_setup_validates_all_metadata_before_writing(self):
+        code, _, err = run('setup', '--config', str(self.config), '--yes', '--claude-email', ' ')
+        self.assertEqual(code, 1)
+        self.assertIn('identity is required', err)
+        self.assertFalse(self.config.exists())
 
     def test_demo_renders_every_face_from_sample_data(self):
         code, out, _ = run('demo', '--out', str(self.tmp / 'demo'), '--scale', '2')
@@ -168,7 +177,8 @@ class ConnectGuardTest(unittest.TestCase):
         config = home / 'config.json'
         config.write_text(json.dumps({'accounts': [{'key': 'codex_a', 'alias': 'CODEX A', 'provider': 'codex',
                                                      'email': 'a@example.com', 'source_home': '~/.codex'}]}))
-        with mock.patch.dict(os.environ, {'HOME': str(home)}), \
+        original_expanduser = Path.expanduser
+        with mock.patch.object(Path, 'expanduser', lambda p: home.joinpath(*p.parts[1:]) if p.parts and p.parts[0] == '~' else original_expanduser(p)), \
                 mock.patch.object(connect.subprocess, 'run') as login, \
                 mock.patch.object(connect.sys, 'argv', ['connect', '--config', str(config), '--account', 'codex_a']), \
                 mock.patch.object(connect.sys.stdin, 'isatty', return_value=False):
@@ -184,7 +194,8 @@ class ConnectGuardTest(unittest.TestCase):
         config = home / 'config.json'
         config.write_text(json.dumps({'accounts': [{'key': 'claude_a', 'alias': 'CLAUDE A', 'provider': 'claude',
                                                      'email': 'a@example.com', 'source_home': '~/.claude'}]}))
-        with mock.patch.dict(os.environ, {'HOME': str(home)}), \
+        original_expanduser = Path.expanduser
+        with mock.patch.object(Path, 'expanduser', lambda p: home.joinpath(*p.parts[1:]) if p.parts and p.parts[0] == '~' else original_expanduser(p)), \
                 mock.patch.object(connect.sys, 'platform', 'darwin'), \
                 mock.patch.object(connect.subprocess, 'run') as login, \
                 mock.patch.object(connect.sys, 'argv', ['connect', '--config', str(config), '--account', 'claude_a']), \
@@ -198,7 +209,9 @@ class ConnectGuardTest(unittest.TestCase):
 
 class StartTest(unittest.TestCase):
     def setUp(self):
-        self.config = Path(tempfile.mkdtemp()) / 'config.json'
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.config = Path(temporary.name) / 'config.json'
 
     def start(self, *extra):
         from token_tv import live
@@ -235,6 +248,39 @@ class StartTest(unittest.TestCase):
         self.assertIn('token-tv demo', err)
         self.assertFalse(self.config.exists())
         run.assert_not_called()
+
+    def test_existing_config_honors_explicit_clock_addresses(self):
+        config = {'accounts': [{'key': 'codex_a', 'alias': 'CODEX A', 'provider': 'codex',
+                               'email': 'b@example.com', 'source_home': '~/.codex'}],
+                  'device_url': 'http://192.0.2.1', 'display_style': 'hud'}
+        self.config.write_text(json.dumps(config))
+        code, _, _, detect, server = self.start('--device-url', '192.0.2.2,192.0.2.3')
+        self.assertEqual(code, 0)
+        updated = sources.load_config(self.config)
+        self.assertEqual(updated['device_urls'], ['http://192.0.2.2', 'http://192.0.2.3'])
+        self.assertNotIn('device_url', updated)
+        self.assertEqual(updated['accounts'], config['accounts'])
+        self.assertEqual(updated['display_style'], 'hud')
+        detect.assert_not_called()
+        server.assert_called_once()
+
+    def test_existing_config_invalid_clock_leaves_file_unchanged(self):
+        config = {'accounts': [{'key': 'a', 'alias': 'A', 'provider': 'codex', 'email': 'a@example.com'}]}
+        self.config.write_text(json.dumps(config))
+        before = self.config.read_bytes()
+        code, _, _, _, server = self.start('--device-url', 'https://clock')
+        self.assertEqual(code, 1)
+        self.assertEqual(self.config.read_bytes(), before)
+        server.assert_not_called()
+
+    def test_existing_config_clock_save_failure_does_not_start(self):
+        config = {'accounts': [{'key': 'a', 'alias': 'A', 'provider': 'codex', 'email': 'a@example.com'}]}
+        self.config.write_text(json.dumps(config))
+        with mock.patch('token_tv.live.write_json', side_effect=OSError('write failed')):
+            code, _, err, _, server = self.start('--device-url', '192.0.2.2')
+        self.assertEqual(code, 1)
+        self.assertIn('Could not save', err)
+        server.assert_not_called()
 
 
 def run_cli(*argv):
