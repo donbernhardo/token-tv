@@ -210,7 +210,7 @@ def main():
             url = target["url"]
             host_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', urlparse(url).netloc)
             dev_backup = state_dir / f"display-original-{host_slug}.json"
-            if not dev_backup.is_file() and backup_path.is_file():
+            if not dev_backup.is_file() and len(targets) == 1 and backup_path.is_file():
                 dev_backup = backup_path
             if dev_backup.is_file():
                 devices[url].restore(json.loads(dev_backup.read_text()))
@@ -253,7 +253,7 @@ def main():
                     if orig is None:
                         if dev_backup.is_file():
                             orig = json.loads(dev_backup.read_text())
-                        elif backup_path.is_file():
+                        elif len(targets) == 1 and backup_path.is_file():
                             orig = json.loads(backup_path.read_text())
                         else:
                             orig = dev.capture()

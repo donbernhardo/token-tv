@@ -106,10 +106,12 @@ but its layout on a HYTE Y70 display has not been tested. There is no Apple Watc
 - `token-tv start --device-url <clock-ip>` also updates an existing config's clock address. Repeat the
   flag or separate addresses with commas for multiple clocks. Stock firmware uses HTTP; HTTPS
   addresses are rejected before saving.
-- TokenTV captures the original display settings before changing the clock. If those settings cannot
-  be read, it reports a backup error and leaves the display alone; restore never relies on guessed settings.
-- To give the clock back its original photo and theme, stop TokenTV and run
-  `token-tv run --restore-display`.
+- TokenTV dedicates the clock's photo album to its active image and deletes all other album images.
+  Existing photos are not retained or backed up.
+- TokenTV records readable original display settings before changing the clock. Stock PRO firmware
+  may expose only its original theme; missing settings remain unknown.
+- To restore readable original theme/settings, stop TokenTV and run `token-tv run --restore-display`.
+  This does not restore deleted photos.
 - **macOS (untested on a real Mac):** Claude Code keeps its login in the Keychain, so TokenTV
   reads it there read-only with `security` when the CLI home has no `.credentials.json`.
   The login is still checked against the configured email. Codex and Grok read files as on Linux.

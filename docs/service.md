@@ -9,6 +9,11 @@ Account metadata is stored in `/root/.config/token-tv/config.json`. Runtime
 snapshots and original clock display backups are stored in `/var/lib/token-tv`.
 Account and clock configuration changes require a service restart.
 
+The configured displays are `10.0.0.128` (SD_PRO) and `10.0.0.175` (SmallTV-PRO,
+stock V3.3.75EN). Both use the selected HUD face. Firmware is detected automatically;
+the PRO uses Picture theme `4` and a one-image slideshow. TokenTV deletes other album
+images after verifying its uploaded image. Existing photos are not retained or backed up.
+
 Codex uses the existing login in `~/.codex`. Gemini uses the existing
 Antigravity (`agy`) login. On this Linux machine, TokenTV reads the email from
 agy's startup banner in a temporary terminal, exits without sending a prompt,

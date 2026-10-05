@@ -23,13 +23,14 @@ runs TokenTV code, so there is nothing to flash and no firmware to restore.
 2. **Draw a face.** Python and Pillow draw a 240×240 image: used percentage, window,
    reset time and account label. An old reading is marked OLD, and missing data shows a dash
    instead of a fake 0%.
-3. **Upload a picture.** The image goes to the clock's `/photo/upload` page as a normal
+3. **Upload a picture.** The image goes to `/photo/upload` (SD_PRO) or `/doUpload?dir=/image/` (stock GeekMagic) as a normal
    file upload: `tokentv.jpg` (kept under 60 KB), or `tokentv.gif` for the animated face.
-4. **Show only that picture.** TokenTV first reads `/theme/list` and `/photo/list` and saves
-   the current settings. It then enables only its own file, switches the clock to the photo
-   theme and leaves your other photos in the album.
-5. **Restore.** A restore command puts the saved photo and theme settings back. TokenTV never
-   deletes your photos.
+4. **Show only that picture.** TokenTV records readable original settings, verifies its uploaded
+   file is present, deletes every other album image, and switches to the photo theme.
+   Stock SmallTV-PRO uses Picture theme `4` and a one-image slideshow. PRO uploads are also
+   verified by downloading and comparing their bytes.
+5. **Restore settings.** A restore command puts readable saved theme/settings back.
+   Existing photos are not backed up; deleted photos cannot be restored.
 
 The clock receives only a picture, never a password, token or cookie. An identical
 image is not uploaded again; a new one is sent only when the rendered picture differs from the last one.
@@ -46,8 +47,8 @@ It runs with built-in sample readings, so no clock or login is needed to try a n
 
 ## Limits
 
-- Verified on one unit: the author's 240×240 GeekMagic SmallTV-style clock with the stock
-  **SD_PRO** web UI, driven from a Linux host. Other firmware, or different photo API paths,
+- Verified through HTTP on SD_PRO and SmallTV-PRO V3.3.75EN units, driven from a Linux host.
+  Other firmware, or different photo API paths,
   may not work. See [compatible clocks](hardware-compatibility.md).
 - It needs an always-on computer on the same network. If that computer sleeps, the clock
   simply keeps showing the last picture it received.

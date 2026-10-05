@@ -118,14 +118,17 @@ GitHub에 보관하고 싶으면 포크하세요.
 
 확인된 경로는 SD_PRO 웹 UI의 `/theme/list`, `/photo/list`, `/photo/upload`입니다.
 설정에 `"device_url": "http://<clock-ip>"`를 추가하면 사진 테마를 사용합니다.
-기기 펌웨어를 바꾸지 않습니다. 기존 사진 파일은 보존하고 선택 상태만 변경합니다.
-원래 테마와 사진 선택 상태는 설정 폴더의 `state/display-original.json`에 저장됩니다.
+기기 펌웨어를 바꾸지 않습니다. TokenTV 전용 앨범을 사용하며 현재 TokenTV 이미지를 제외한 사진은 삭제합니다.
+기존 사진은 보존하거나 백업하지 않습니다. 읽을 수 있는 원래 테마와 설정만 기기별로 저장됩니다.
+SmallTV-PRO V3.3.75EN은 `/v.json`으로 감지하고 Picture 테마 `4`를 사용합니다.
 
 복원 전 데몬을 정지한 뒤 실행합니다.
 
 ```bash
 token-tv run --restore-display
 ```
+
+이 명령은 저장된 테마와 설정만 복원하며 삭제된 사진은 복원하지 않습니다.
 
 사진 API가 없는 다른 펌웨어는 아직 실기기로 검증하지 않았습니다. 확인된 범위와 내 시계 확인 방법은 [docs/hardware-compatibility.md](hardware-compatibility.md)에 있습니다.
 
@@ -199,4 +202,3 @@ node scripts/test_web_browser.cjs
 The test captures four desktop/mobile appearances, tests five viewport widths,
 account choices, missing/stale/offline data, and clock controls. Its apply request
 is intercepted, so running it does not change a connected clock.
-
