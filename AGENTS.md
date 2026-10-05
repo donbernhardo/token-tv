@@ -36,7 +36,7 @@ Verified on Linux with one SD_PRO clock. Mac and Windows hosts are untested; rep
 
 - Never read, print or copy credential files (`.credentials.json`, `auth.json`, Keychain items) or
   real config files. Tests use `token_tv/sample.py` and temporary folders.
-- Do not publish, push, open issues or create releases on the user's behalf.
+- Do not publish, open issues or create releases on the user's behalf.
 - A missing reading is a dash, an old one is marked OLD. Never turn unknown into `0`.
 - `token-tv setup --yes --<provider>-email ...` is non-interactive and never overwrites a config.
   `token-tv doctor --live` contacts providers; ask the user before running it.
