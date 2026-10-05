@@ -86,6 +86,28 @@ def time_left(reset):
     return str(minutes // 60) + 'h ' + str(minutes % 60) + 'm'
 
 
+def quota_metrics(row):
+    """Separate short and weekly capacity; never invent a missing window."""
+    windows = row.get('windows', [])
+    short = next((w for w in windows if w.get('label') == '5H'), None)
+    weekly = next((w for w in windows if w.get('label') == 'WEEK'), None)
+    if short is None:
+        short = next((w for w in windows if w.get('label') not in ('WEEK', '5H') and
+                      0 < (w.get('duration_minutes') or 0) <= 360), None)
+    if weekly is None:
+        weekly = next((w for w in windows if w.get('label') not in ('5H', 'BUDGET') and
+                       (w.get('duration_minutes') or 0) > 360), None)
+    if short is None:
+        short = next((w for w in windows if w.get('label') == 'BUDGET'), None)
+
+    def metric(value, label):
+        used = value.get('used_percent') if value else None
+        remaining = max(0, min(100, round(100 - used))) if used is not None else None
+        return remaining, time_left(value.get('resets_at')) if value else '--', label
+
+    return metric(short, 'BUDGET' if short and short.get('label') == 'BUDGET' else '5H'), metric(weekly, 'WEEK')
+
+
 def mascot(image, provider, xy, pixel=False, size=40):
     path = ASSETS / (provider + '-pixel.png')
     if path.is_file():
@@ -201,36 +223,8 @@ def pixel_text(draw, xy, text, scale=1, color=TEXT, align='left'):
 
 
 def render_pixel(snapshot):
-    image = Image.new('RGB', (240, 240), BACKGROUND)
-    draw = ImageDraw.Draw(image)
-    rows = overview_rows(snapshot)
-    for index, row in enumerate(rows):
-        y = 8 + index * 78 + row_shift(len(rows), 78)
-        if index:
-            for x in range(14, 227, 4):
-                draw.point((x, y - 6), fill=RULE)
-        if row['provider'] == 'grok':
-            disc = Image.new('RGB', (24, 24), BACKGROUND)
-            ImageDraw.Draw(disc).ellipse((1, 1, 22, 22), fill=ICON_PAPER)
-            image.paste(disc.resize((48, 48), Image.Resampling.NEAREST), (14, y + 10))
-        mascot(image, row['provider'], (14, y + 10), pixel=True)
-        label = row['alias']
-        if not label.startswith(row['provider'].upper() + ' '):
-            label = row['provider'].upper() + ' A'
-        pixel_text(draw, (68, y + 3), label)
-        value = primary_window(row)
-        used = max(0, min(100, value['used_percent'])) if value else None
-        old = row['status'] != 'ok'
-        number = '--' if used is None else str(round(used)) + '%'
-        pixel_text(draw, (68, y + 21), number, scale=3, color=TEXT)
-        if value:
-            period = {'WEEK': 'WK', 'BUDGET': 'BUD'}.get(value['label'], value['label'])
-            pixel_text(draw, (226, y + 3), period + (' OLD' if old else ' USED'), color=MUTED, align='right')
-            pixel_text(draw, (226, y + 25), time_left(value.get('resets_at')).replace(' ', ''), scale=2, color=MUTED, align='right')
-        else:
-            pixel_text(draw, (226, y + 25), STATUS.get(row['status'], 'NO DATA'), color=MUTED, align='right')
-        horizontal_gauge(draw, (68, y + 52), used)
-    return image
+    from token_tv.themes import render_pixel_info
+    return render_pixel_info(snapshot)
 
 
 def render_page(snapshot, page=0, style='pixel'):

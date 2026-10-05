@@ -76,9 +76,11 @@ never a password, token or cookie. Polling runs every five minutes; old readings
 missing data shows a dash, never a fake 0%. Claude accounts with `refresh_with_cli: true` may
 refresh an expired login through the CLI, which sends one tiny prompt.
 
-**5-hour or weekly?** Both windows are read. The clock shows whichever is more used, with that
-window's reset time. The web dashboard shows the same window first; open the other windows
-under it to see the rest.
+**5-hour or weekly?** Both windows are read. Digital, Neon, Pixel, Pixel Retro and Sci-Fi HUD
+clock faces show remaining capacity for the short and weekly windows, their reset timers,
+the current time/date, and any reported banked resets with their earliest expiration date.
+Missing windows stay unknown. Space keeps its animated used-quota display. The web dashboard
+shows used quota, with the highest reported window first; open the other windows underneath.
 
 **Other screens (HYTE, Apple Watch)?** There is a browser dashboard,
 but its layout on a HYTE Y70 display has not been tested. There is no Apple Watch app.

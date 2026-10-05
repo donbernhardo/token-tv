@@ -6,6 +6,13 @@ Faces still receive at most three provider rows. When four services are configur
 alternates pages every ten seconds before calling your render function. `render_page(data, 0)`
 and `render_page(data, 1)` preview each page; `render_page(data, None)` follows the live rotation.
 
+Digital, Neon and Pixel share the information shown by Pixel Retro and Sci-Fi HUD:
+time/date, remaining short-window and weekly capacity, separate reset timers,
+and any banked reset credits with their earliest expiry. Their gauges fill with
+remaining capacity, while warning colours follow quota used. Space is a separate
+animated face and retains its used-quota tags. `quota_metrics()` in `display.py`
+keeps missing windows unknown instead of treating a weekly reading as a 5-hour one.
+
 ## 1. Try a face without touching the code
 
 First set up the repository once, as in the [Game Boy example](../examples/gameboy#run-it-no-clock-no-login-no-fork)

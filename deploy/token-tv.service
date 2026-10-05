@@ -1,0 +1,26 @@
+[Unit]
+Description=TokenTV dashboard and clock display
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/token-tv
+Environment=HOME=/root
+Environment=PATH=/root/token-tv/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/root/token-tv/.venv/bin/token-tv run --config /root/.config/token-tv/config.json --host 192.168.2.240 --port 8788 --state-dir /var/lib/token-tv
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+StateDirectory=token-tv
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

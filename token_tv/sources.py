@@ -312,8 +312,70 @@ def gemini_payload(account):
         raise SourceError("source_unavailable")
 
 
+def agy_identity(root):
+    """Read the signed-in identity from the CLI banner without sending a prompt."""
+    if sys.platform != "linux" or root != Path("~/.gemini").expanduser():
+        return None
+    import pty
+    import select
+    import fcntl
+    import struct
+    import termios
+
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+    process = None
+    try:
+        env = scoped_env("gemini", root)
+        env['TERM'] = 'xterm-256color'
+        process = subprocess.Popen(
+            [exe(os.environ.get("TOKEN_TV_GEMINI_BIN", "agy"))],
+            env=env, stdin=slave, stdout=slave, stderr=slave,
+        )
+        os.close(slave)
+        slave = None
+        output = b""
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if not select.select([master], [], [], 0.2)[0]:
+                if process.poll() is not None:
+                    break
+                continue
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output += chunk
+            text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output.decode(errors="replace"))
+            if "Antigravity CLI" in text:
+                banner = text.split("Antigravity CLI", 1)[1].split("────────────────", 1)[0]
+                match = re.search(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", banner)
+                if match:
+                    return match.group().casefold()
+        return None
+    except OSError:
+        return None
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        os.close(master)
+        if slave is not None:
+            os.close(slave)
+
+
 def gemini_identity(account):
     root = Path(account.get("source_home", "~/.gemini")).expanduser()
+    if sys.platform == "linux" and root == Path("~/.gemini").expanduser():
+        # The installed agy login is separate from legacy Gemini credentials.
+        # Do not attribute agy's quotas to a different CLI's saved identity.
+        return agy_identity(root)
     for name in ("auth.json", "oauth_creds.json", "identity.json", ".credentials.json"):
         path = root / name
         if path.is_file():

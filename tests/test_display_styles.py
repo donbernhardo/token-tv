@@ -8,17 +8,71 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
-from token_tv.display import STYLES, gauge_color, render_page
+from token_tv.display import STYLES, gauge_color, render_page, quota_metrics
 from token_tv.live import DisplayPreferences, handler
 from token_tv.sources import load_config
 from token_tv.state import UsageStore
 
 
 class DisplayStyleTests(unittest.TestCase):
+    def test_updated_faces_show_both_remaining_windows_and_reset_credits(self):
+        import time
+        from datetime import datetime
+        from token_tv.sample import snapshot, H, D
+        from token_tv.themes import Canvas
+        now = time.time()
+        data = snapshot(now, [('codex_a', 'CODEX A', 'codex', [('5H', 34, 2 * H + 12 * 60), ('WEEK', 72, 3 * D + 4 * H)])])
+        expiry = datetime.fromtimestamp(data['accounts']['codex_a']['banked_resets']['earliest_expires_at']).strftime('%d/%m')
+        original = Canvas.text
+        for style in ('digital', 'neon', 'pixel'):
+            texts = []
+            def capture(canvas, xy, text, *args, **kwargs):
+                texts.append(text.upper())
+                return original(canvas, xy, text, *args, **kwargs)
+            with self.subTest(style=style), patch.object(Canvas, 'text', capture):
+                render_page(data, style=style)
+                self.assertIn('5H LEFT', texts)
+                self.assertIn('66' if style == 'digital' else '66%', texts)
+                self.assertIn('WEEK 28% LEFT', texts)
+                self.assertIn('2H 12M', texts)
+                self.assertIn('3D 4H', texts)
+                self.assertIn('1 ' + expiry, texts)
+                self.assertIn(datetime.now().strftime('%H:%M'), texts)
+                self.assertIn(datetime.now().strftime('%d.%m.%y'), texts)
+
+    def test_weekly_only_and_unknown_windows_are_not_invented(self):
+        primary, weekly = quota_metrics({'windows': [{'label': 'WEEK', 'used_percent': 94}]})
+        self.assertEqual(primary, (None, '--', '5H'))
+        self.assertEqual(weekly, (6, '--', 'WEEK'))
+        self.assertEqual(quota_metrics({'windows': []}), ((None, '--', '5H'), (None, '--', 'WEEK')))
+        self.assertEqual(quota_metrics({'windows': [{'label': 'BUDGET', 'used_percent': 61}]})[0], (39, '--', 'BUDGET'))
+        self.assertEqual(quota_metrics({'windows': [{'label': '5H', 'used_percent': 0}]})[0][0], 100)
+        self.assertEqual(quota_metrics({'windows': [{'label': '5H', 'used_percent': 100}]})[0][0], 0)
+
+    def test_updated_faces_keep_unknown_and_old_visible(self):
+        from token_tv.themes import Canvas
+        original = Canvas.text
+        for style in ('digital', 'neon', 'pixel'):
+            for status, windows, expected in (
+                ('auth_required', [], 'LOGIN'),
+                ('stale', [{'label': '5H', 'used_percent': 34}], 'OLD'),
+            ):
+                texts = []
+                def capture(canvas, xy, text, *args, **kwargs):
+                    texts.append(text.upper())
+                    return original(canvas, xy, text, *args, **kwargs)
+                with self.subTest(style=style, status=status), patch.object(Canvas, 'text', capture):
+                    render_page({'accounts': {'a': {'provider': 'codex', 'alias': 'CODEX A', 'status': status, 'windows': windows}}}, style=style)
+                    self.assertIn(expected, texts)
+                    self.assertIn('WEEK -- LEFT', texts)
+                    if not windows:
+                        self.assertIn('--', texts)
+                        self.assertNotIn('0%', texts)
+
     def test_style_picker_persists_without_querying_accounts(self):
         account = {'key': 'a', 'alias': 'CLAUDE A', 'provider': 'claude', 'email': 'owner@example.com'}
         row = dict(account, status='ok', windows=[{'label': 'WEEK', 'used_percent': 94, 'resets_at': None}], fetched_at=100)

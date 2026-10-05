@@ -1,6 +1,8 @@
 import copy
 import io
 import json
+import os
+import sys
 import tempfile
 import time
 import unittest
@@ -22,6 +24,34 @@ from token_tv.display import render_page, pages, overview_rows, primary_window
 
 
 class LiveTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'linux', 'agy banner detection uses a Linux terminal')
+    def test_agy_identity_checks_actual_cli_banner_before_reading_usage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cli = Path(directory) / 'agy-test'
+            cli.write_text('#!' + sys.executable + '\n'
+                           'print("\\x1b[1mAntigravity CLI 1.2.17\\x1b[m\\n signed-in@example.com", flush=True)\n'
+                           'import time; time.sleep(30)\n')
+            cli.chmod(0o700)
+            with patch.dict(os.environ, {'TOKEN_TV_GEMINI_BIN': str(cli)}):
+                for email, expected in (('signed-in@example.com', 'ok'), ('wrong@example.com', 'identity_mismatch')):
+                    with self.subTest(email=email), patch('token_tv.sources.gemini_payload', return_value={'buckets': [{'window': '5h', 'used_percent': 42}]}) as usage:
+                        row = fetch_account({'key': 'gemini_a', 'alias': 'GEMINI A', 'provider': 'gemini', 'email': email, 'source_home': '~/.gemini'})
+                        self.assertEqual(row['status'], expected)
+                        self.assertEqual(row['identity_verified'], expected == 'ok')
+                        if expected == 'ok':
+                            usage.assert_called_once()
+                        else:
+                            usage.assert_not_called()
+                            self.assertEqual(row['windows'], [])
+
+    @unittest.skipUnless(sys.platform == 'linux', 'agy banner detection uses a Linux terminal')
+    def test_agy_missing_banner_does_not_use_legacy_identity(self):
+        with patch('token_tv.sources.agy_identity', return_value=None), patch('token_tv.sources.gemini_payload') as usage:
+            row = fetch_account({'key': 'gemini_a', 'alias': 'GEMINI A', 'provider': 'gemini', 'email': 'expected@example.com', 'source_home': '~/.gemini'})
+        self.assertEqual(row['status'], 'identity_unavailable')
+        self.assertFalse(row['identity_verified'])
+        usage.assert_not_called()
+
     def test_provider_cli_environment_does_not_inherit_other_authentication(self):
         with patch.dict("os.environ", {"OPENAI_API_KEY": "DO-NOT-INHERIT", "GROK_OAUTH_TOKEN": "DO-NOT-INHERIT", "CLAUDE_CODE_OAUTH_TOKEN": "DO-NOT-INHERIT", "GEMINI_API_KEY": "DO-NOT-INHERIT"}):
             for provider, variable in (("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME"), ("grok", "GROK_HOME"), ("gemini", "GEMINI_HOME")):

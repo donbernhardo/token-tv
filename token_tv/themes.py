@@ -1,8 +1,9 @@
-"""Four LCD themes that match the web appearances; every reading stays live text.
+"""LCD clock themes that match the web appearances; every reading stays live text.
 
 Each 240×240 frame shows one account per provider in three rows. Fonts are the
 bundled web fonts, gauges keep ten 10% cells, and each used-quota band is drawn as
 a two-tone gradient from its start colour to its tip (tokens.css lvl-*-2 → lvl-*).
+Digital, Neon and Pixel show both remaining quota windows and their reset times.
 """
 import functools
 import math
@@ -13,7 +14,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from token_tv.display import (
-    PROVIDER_INK, STATUS, account_label, mascot, overview_rows, primary_window, quota_period, row_shift, time_left,
+    PROVIDER_INK, STATUS, account_label, mascot, overview_rows, primary_window, quota_period, row_shift, time_left, quota_metrics, gauge_color,
 )
 
 WEB = Path(__file__).with_name('web')
@@ -311,76 +312,119 @@ def number_text(used):
     return '--' if used is None else str(round(used))
 
 
-def render_digital(snapshot):
-    mint, dim, line, amber, unlit = '#7dffd0', '#4dbb92', '#22694f', '#ffcf5a', '#0d3326'
-    cv = Canvas('#020906')
-    for y in range(0, SIZE, 3):
-        cv.back.line((0, y, SIZE, y), fill='#04130d')
-    vt, seg = (lambda s: face('vt323.woff2', s)), (lambda s: face('dseg7-classic-bold.woff2', s))
+def render_capacity(snapshot, style):
+    """Digital, Neon and Pixel share telemetry while keeping their own visual language."""
+    pixel = style == 'pixel'
+    neon = style == 'neon'
+    bg = '#04030a' if neon else '#0b0e12' if pixel else '#020906'
+    cv = Canvas(bg)
+    if neon:
+        for y in range(4, SIZE, 8):
+            for x in range(4, SIZE, 8):
+                cv.back.point((x, y), fill='#0e0b1c')
+    elif not pixel:
+        for y in range(0, SIZE, 3):
+            cv.back.line((0, y, SIZE, y), fill='#04130d')
+    label_font = (lambda size: face('press-start-2p.ttf', size)) if pixel else (
+        (lambda size: face('oxanium.woff2', size, 700)) if neon else
+        (lambda size: face('vt323.woff2', size)))
+    number_font = (lambda size: face('press-start-2p.ttf', size)) if pixel else (
+        (lambda size: face('oxanium.woff2', size, 800)) if neon else
+        (lambda size: face('dseg7-classic-bold.woff2', size)))
+    ink = '#d9dde1' if pixel else '#ffffff' if neon else '#7dffd0'
+    dim = '#aeb8c3' if pixel else '#b7afd3' if neon else '#4dbb92'
+    now = datetime.now()
+    cv.back.rectangle((4, 2, 235, 23), fill=bg, outline='#28313a' if pixel else '#302247' if neon else '#22694f')
+    cv.text((11, 4), now.strftime('%H:%M'), label_font(11 if pixel else 17), ink)
+    cv.text((228, 5), now.strftime('%d.%m.%y'), label_font(10 if pixel else 16), dim, anchor='ra')
     rows = overview_rows(snapshot)
+    card_h = 100 if len(rows) == 2 else 66 if len(rows) >= 3 else 120
+    ys = [29, 134] if len(rows) == 2 else [28, 97, 166] if len(rows) >= 3 else [70]
+    compact = card_h == 66
     for index, row in enumerate(rows):
-        y = ROWS[index] + row_shift(len(rows), ROWS[1] - ROWS[0])
-        used, period, old, reset = reading(row)
-        cv.back.rectangle((4, y, 235, y + ROW_H - 1), fill='#03100b', outline=line)
-        cv.back.line((5, y + 25, 234, y + 25), fill='#0f3a2c')
-        # LCD: the bot lit in the same mint phosphor as the text, dark eyes, soft glow; no brand colours.
-        place_bot(cv.ink, bot_sprite(row['provider'], 24, 17, mint, '#03100b'), (9, y + 4, 24, 17))
-        place_bot(cv.bloom, bot_sprite(row['provider'], 24, 17, (61, 252, 176), '#03100b'), (9, y + 4, 24, 17))
-        cv.text((38, y + 3), account_label(row) + ' >', vt(22), mint, glow=(61, 252, 176, 90))
-        cv.text((229, y + 4), period + (' OLD' if old else ''), vt(20), amber if old else dim, anchor='ra')
-        if used is None:
-            cv.text((11, y + 31), '-- NO DATA', vt(26), dim)
+        y = ys[index]
+        primary, weekly = quota_metrics(row)
+        remaining, reset, period = primary
+        week_remaining, week_reset, _ = weekly
+        old = bool(row.get('windows')) and row['status'] != 'ok'
+        status = 'OLD' if old else STATUS.get(row['status'], 'NO DATA') if not row.get('windows') else ''
+        accent = PROVIDER_INK[row['provider']] if pixel else ACCENT['neon'][row['provider']][0] if neon else '#7dffd0'
+        box = (4, y, 235, y + card_h - 1)
+        if neon:
+            cv.back.rounded_rectangle(box, radius=9, fill=mix(bg, accent, .05))
+            cv.draw.rounded_rectangle(box, radius=9, outline=mix(accent, '#ffffff', .3))
+            cv.glow.rounded_rectangle(box, radius=9, outline=rgb(accent) + (180,), width=2)
         else:
-            number = number_text(used)
-            cv.text((11, y + 32), ghost(number), seg(25), unlit)
-            cv.text((11, y + 32), number, seg(25), mint, glow=(61, 252, 176, 120))
-            x = 11 + cv.draw.textlength(number, font=seg(25)) + 3
-            cv.text((x, y + 38), '%', vt(24), mint)
-        if reset != '--':
-            clock = segment_time(reset)
-            cv.text((229, y + 28), 'RESETS IN', vt(16), dim, anchor='ra')
-            cv.text((229, y + 43), ghost(clock), seg(14), '#2a2108', anchor='ra')
-            cv.text((229, y + 43), clock, seg(14), amber, glow=(255, 190, 70, 120), anchor='ra')
-        gauge(cv, (11, y + 61, 229, y + 70), used, band('digital', used or 0), gap=3, track='#0b2a1f',
-              empty='#2a6b52', stale=old, split='#03100b', glow=True)
-    return cv.finish(blur=2)
+            cv.back.rectangle(box, fill=bg if pixel else '#03100b', outline='#28313a' if pixel else '#22694f')
+        place_bot(cv.ink, bot_sprite(row['provider'], 19, 16, None if pixel else accent), (10, y + 4, 19, 16))
+        name = clean_provider_name(row)
+        name_font = label_font(9 if pixel else 13 if neon else 19)
+        # Reserve the right side for the reset-credit count and expiration.
+        while cv.draw.textlength(name, font=name_font) > 95 and len(name) > 1:
+            name = name[:-1]
+        cv.text((35, y + 4), name, name_font, ink)
+        if status:
+            cv.text((129, y + 6), status, label_font(6 if pixel else 9 if neon else 13), '#ff5d8f' if old else dim, anchor='ra')
+        banked = row.get('banked_resets') or {}
+        if banked.get('count', 0) > 0:
+            expiry = banked.get('earliest_expires_at')
+            credit_text = str(banked['count']) + (' ' + datetime.fromtimestamp(expiry).strftime('%d/%m') if expiry else '')
+            credit_font = label_font(8 if pixel else 11 if neon else 16)
+            width = cv.draw.textlength(credit_text, font=credit_font)
+            draw_pixel_star(cv.draw, 228 - width - 9, y + 12, fill='#ffd23f')
+            cv.text((228, y + 5), credit_text, credit_font, '#ffd23f', anchor='ra')
+
+        # Both windows are displayed independently, with gauges representing capacity left.
+        value = number_text(remaining) + ('%' if remaining is not None else '')
+        num_size = (15 if compact else 20) if pixel else (23 if compact else 30) if neon else (18 if compact else 25)
+        font_number = number_font(num_size)
+        num_y = y + (20 if compact else 23)
+        if style == 'digital':
+            digits = number_text(remaining)
+            cv.text((12, num_y), ghost(digits), font_number, '#0d3326')
+            cv.text((12, num_y), digits, font_number, ink)
+            value_width = cv.draw.textlength(digits, font=font_number)
+            if remaining is not None:
+                cv.text((14 + value_width, num_y + 2), '%', label_font(17 if compact else 23), ink)
+                value_width += cv.draw.textlength('%', font=label_font(17 if compact else 23)) + 2
+        else:
+            cv.text((12, num_y), value, font_number, ink)
+            value_width = cv.draw.textlength(value, font=font_number)
+        cv.text((12 + value_width + 6, num_y + 4), period + ' LEFT', label_font(6 if pixel else 8 if neon else 13), dim)
+        # Pixel's square glyphs are wider; keep the reset timer clear of the number.
+        cv.text((228, y + (22 if compact else 25)), reset.upper() if pixel else reset,
+                label_font(8 if pixel else 11 if compact else 14 if neon else 18), ink, anchor='ra')
+        if not compact:
+            cv.text((228, y + 44), 'RESET IN', label_font(7 if pixel else 10 if neon else 14), dim, anchor='ra')
+        gauge_y = y + (39 if compact else 52)
+        colors = (gauge_color(100 - remaining),) * 2 if pixel and remaining is not None else band('neon' if neon else 'digital', 100 - (remaining if remaining is not None else 100))
+        gauge(cv, (12, gauge_y, 227, gauge_y + (4 if compact else 7)), remaining, colors,
+              gap=3, shape='round' if neon else 'rect', track='#15122a' if neon else '#28313a' if pixel else '#0b2a1f',
+              empty='#4a4170' if neon else '#51616f' if pixel else '#2a6b52', stale=old, glow=not pixel, stepped=pixel)
+        week_y = y + (48 if compact else 66)
+        week_value = number_text(week_remaining) + ('%' if week_remaining is not None else '')
+        week_label = 'WK' if compact else 'WEEK'
+        cv.text((12, week_y), week_label + ' ' + week_value + ' LEFT', label_font(7 if pixel else 10 if compact else 12 if neon else 17), ink)
+        cv.text((228, week_y), week_reset.upper() if pixel else week_reset,
+                label_font(8 if pixel else 10 if compact else 13 if neon else 17), ink, anchor='ra')
+        week_gauge_y = y + (61 if compact else 88)
+        week_colors = (gauge_color(100 - week_remaining),) * 2 if pixel and week_remaining is not None else band('neon' if neon else 'digital', 100 - (week_remaining if week_remaining is not None else 100))
+        gauge(cv, (12, week_gauge_y, 227, week_gauge_y + (2 if compact else 5)), week_remaining, week_colors,
+              gap=3, shape='round' if neon else 'rect', track='#15122a' if neon else '#28313a' if pixel else '#0b2a1f',
+              empty='#4a4170' if neon else '#51616f' if pixel else '#2a6b52', stale=old, glow=not pixel, stepped=pixel)
+    return cv.finish(blur=3 if neon else 2)
+
+
+def render_digital(snapshot):
+    return render_capacity(snapshot, 'digital')
 
 
 def render_neon(snapshot):
-    """Neon tubes: a bright core line over a wide halo; the number glows in the provider colour."""
-    cv = Canvas('#04030a')
-    for y in range(4, SIZE, 8):
-        for x in range(4, SIZE, 8):
-            cv.back.point((x, y), fill='#0e0b1c')
-    orb, ox = (lambda s, w=700: face('orbitron.ttf', s, w)), (lambda s, w=800: face('oxanium.woff2', s, w))
-    rows = overview_rows(snapshot)
-    for index, row in enumerate(rows):
-        y = ROWS[index] + row_shift(len(rows), ROWS[1] - ROWS[0])
-        a, a2 = ACCENT['neon'][row['provider']]
-        used, period, old, reset = reading(row)
-        box = (5, y + 1, 234, y + ROW_H - 2)
-        cv.back.rounded_rectangle(box, radius=12, fill=mix('#06050e', a, .05))
-        cv.glow.rounded_rectangle(box, radius=12, outline=rgb(a) + (255,), width=3)
-        cv.draw.rounded_rectangle(box, radius=12, outline=mix(a, '#ffffff', .45), width=1)
-        # Neon: each row is already lit in its provider colour, so the bot takes that same colour with a halo.
-        place_bot(cv.ink, bot_sprite(row['provider'], 26, 26, mix(a, '#ffffff', .35)), (12, y + 9, 26, 26))
-        place_bot(cv.bloom, bot_sprite(row['provider'], 26, 26, a), (12, y + 9, 26, 26))
-        cv.text((46, y + 9), account_label(row), orb(11), '#ffffff')
-        cv.text((228, y + 9), period + (' OLD' if old else ''), orb(10), '#ff5d8f' if old else mix(a, '#ffffff', .2),
-                glow=rgb(a) + (160,), anchor='ra')
-        number = number_text(used)
-        cv.text((45, y + 22), number, ox(33), '#ffffff')
-        cv.glow.text((45, y + 22), number, font=ox(33), fill=rgb(a) + (255,), stroke_width=2, stroke_fill=rgb(a) + (255,))
-        if used is not None:
-            x = 45 + cv.draw.textlength(number, font=ox(33)) + 2
-            cv.text((x, y + 36), '%', ox(16, 700), mix(a, '#ffffff', .6))
-        cv.text((228, y + 31), reset, ox(17, 700), '#ffffff', glow=rgb(a) + (170,), anchor='ra')
-        ring = 228 - cv.draw.textlength(reset, font=ox(17, 700)) - 12
-        clock_mark(cv, (ring, y + 40), 7, mix(a, '#ffffff', .3), 1)
-        cv.glow.ellipse((ring - 8, y + 32, ring + 8, y + 48), outline=rgb(a) + (220,), width=2)
-        gauge(cv, (14, y + 59, 226, y + 66), used, band('neon', used or 0), gap=3, shape='round', radius=3,
-              track='#15122a', empty='#4a4170', stale=old, glow=True)
-    return cv.finish(blur=3)
+    return render_capacity(snapshot, 'neon')
+
+
+def render_pixel_info(snapshot):
+    return render_capacity(snapshot, 'pixel')
 
 
 def pixel_scene(cv, provider, top):
