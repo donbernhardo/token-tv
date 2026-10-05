@@ -770,25 +770,27 @@ def render_hud(snapshot):
         place_bot(cv.bloom, bot_sprite(row['provider'], 19, 17, a), (11, y + 6, 19, 17))
         cv.text((36, y + 6), clean_name, chakra(14, True), '#ffffff')
 
-        # Banked resets indicator (small stars + earliest expiration date dd/mm)
+        # Right-aligned banked resets: larger stars and expiration date dd/mm.
         banked = row.get('banked_resets')
         if banked and banked.get('count', 0) > 0:
             count = banked.get('count', 0)
             earliest_exp = banked.get('earliest_expires_at')
-            name_w = cv.draw.textlength(clean_name, font=chakra(14, True))
-            cur_x = 36 + name_w + 6
-            star_y = y + 14
-            for _ in range(min(count, 5)):
-                draw_hud_star(cv.draw, cur_x + 4, star_y, 4.2, 2.0, 5, fill='#ffd23f')
-                draw_hud_star(cv.glow, cur_x + 4, star_y, 4.2, 2.0, 5, fill=(255, 210, 63, 180))
-                cur_x += 11
+            star_count = min(count, 5)
+            stars_right = 228
             if earliest_exp:
                 exp_date = datetime.fromtimestamp(earliest_exp).strftime('%d/%m')
-                cv.text((cur_x + 1, y + 8), exp_date, chakra(10, True), '#8fadc6', glow=(143, 173, 198, 70))
+                cv.text((228, y + 3), exp_date, chakra(14, True), '#8fadc6',
+                        glow=(143, 173, 198, 70), anchor='ra')
+                stars_right -= cv.draw.textlength(exp_date, font=chakra(14, True)) + 7
+            star_y = y + 13
+            for star in range(star_count):
+                star_x = stars_right - 6 - (star_count - 1 - star) * 14
+                draw_hud_star(cv.draw, star_x, star_y, 6, 2.8, 5, fill='#ffd23f')
+                draw_hud_star(cv.glow, star_x, star_y, 6, 2.8, 5, fill=(255, 210, 63, 180))
 
         # Top-right badge (only show if old/stale)
         if old:
-            cv.text((228, y + 7), '[ OLD ]', chakra(10, True), '#ff4d6a', glow=glow_rgb + (160,), anchor='ra')
+            cv.text((228, y + 18), '[ OLD ]', chakra(8, True), '#ff4d6a', glow=glow_rgb + (160,), anchor='ra')
 
         if card_h >= 90:
             # Primary 5H Metric (counting down capacity left, evenly spaced)
@@ -802,9 +804,10 @@ def render_hud(snapshot):
             # Divider line between remaining number and reset
             cv.draw.line((140, y + 20, 140, y + 43), fill='#152f47')
 
-            # Resets in telemetry
-            cv.spaced((228, y + 19), '5H RESETS IN', chakra(7, False), '#6c8aa5', 1.2, anchor='ra')
+            # Inline reset label matches the weekly countdown.
             cv.text((228, y + 28), reset_5h, chakra(14, True), '#ffffff', glow=glow_rgb + (100,), anchor='ra')
+            rst_len = cv.draw.textlength(reset_5h, font=chakra(14, True))
+            cv.spaced((228 - rst_len - 6, y + 30), 'RESET', chakra(8, False), '#6c8aa5', 1.0, anchor='ra')
 
             # Primary 5H Gauge with provider-specific theme band
             gauge_colors = get_hud_band(p, rem_5h)
