@@ -22,6 +22,7 @@ PROVIDERS = {
     'claude': ('claude', '~/.claude', '.credentials.json', 'claude auth login'),
     'codex': ('codex', '~/.codex', 'auth.json', 'codex login'),
     'grok': ('grok', '~/.grok', 'auth.json', 'grok login'),
+    'gemini': ('agy', '~/.gemini', 'settings.json', 'agy'),
 }
 
 
@@ -31,7 +32,12 @@ def default_config():
 
 
 def cli_path(provider):
-    command = os.environ.get('TOKEN_TV_GROK_BIN', 'grok') if provider == 'grok' else PROVIDERS[provider][0]
+    if provider == 'grok':
+        command = os.environ.get('TOKEN_TV_GROK_BIN', 'grok')
+    elif provider == 'gemini':
+        command = os.environ.get('TOKEN_TV_GEMINI_BIN', 'agy')
+    else:
+        command = PROVIDERS[provider][0]
     return shutil.which(command)
 
 
@@ -40,6 +46,10 @@ def login_state(provider, home):
     root = Path(home).expanduser()
     if (root / PROVIDERS[provider][2]).is_file():
         return 'yes'
+    if provider == 'gemini':
+        for alt in ('antigravity-cli/settings.json', 'oauth_creds.json', 'auth.json', '.credentials.json'):
+            if (root / alt).is_file():
+                return 'yes'
     if provider == 'claude' and sys.platform == 'darwin':
         return 'keychain'
     return 'no'
@@ -100,22 +110,27 @@ def setup(args):
         print('No accounts given. Pass --claude-email, --codex-email or --grok-email (repeat for B and C), '
               'or run setup in a terminal to be asked.', file=sys.stderr)
         return 1
-    device = args.device_url
-    while device is None and interactive:
-        device = ask('\nClock address, e.g. http://192.168.0.50 (blank for dashboard only)')
-        try:
-            device = device and device_address(device)
-        except ValueError as error:
-            print(f'  {error}')
-            device = None
-    try:
-        device = device and device_address(device)
-    except ValueError as error:
-        print(error, file=sys.stderr)
-        return 1
+    raw_devices = args.device_url if isinstance(args.device_url, list) else ([args.device_url] if args.device_url else None)
+    while raw_devices is None and interactive:
+        ans = ask('\nClock address, e.g. http://192.168.0.50 (blank for dashboard only)')
+        raw_devices = [ans] if ans else []
+    clean_devices = []
+    if raw_devices:
+        for entry in raw_devices:
+            for item in entry.split(','):
+                item = item.strip()
+                if item:
+                    try:
+                        clean_devices.append(device_address(item))
+                    except ValueError as error:
+                        print(error, file=sys.stderr)
+                        return 1
     config = {'poll_seconds': 300, 'accounts': accounts, 'display_style': 'digital'}
-    if device:
-        config['device_url'] = device
+    if len(clean_devices) == 1:
+        config['device_url'] = clean_devices[0]
+        config['device_urls'] = clean_devices
+    elif len(clean_devices) > 1:
+        config['device_urls'] = clean_devices
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'x') as handle:  # 'x' refuses to replace a file created meanwhile
@@ -181,7 +196,18 @@ def doctor(args):
             ready = False
             line += f'\n{"":<18}install the {provider} CLI, then log in ({PROVIDERS[provider][3]})'
         print(line)
-    print('Clock: ' + (config.get('device_url') or 'none (dashboard only)'))
+    clock_targets = []
+    try:
+        from token_tv.sources import normalize_device_targets
+        clock_targets = normalize_device_targets(config)
+    except Exception:
+        pass
+    if not clock_targets:
+        print('Clock: none (dashboard only)')
+    else:
+        for t in clock_targets:
+            style_str = f" [{t['style']}]" if t.get('configured_style') else ""
+            print(f"Clock: {t['url']}{style_str}")
     if not ready:
         print(f'Fix the lines above, then run token-tv doctor{flag} again.')
     elif args.live:
@@ -237,19 +263,29 @@ def start(args):
             print('No signed-in Claude, Codex or Grok CLI found. Sign in to one (for example `claude`, then /login),\n'
                   'or look around first with: token-tv demo', file=sys.stderr)
             return 1
-        device = args.device_url
-        if device is None and interactive:
-            device = ask('Clock address shown on the clock screen, e.g. 192.168.0.50 (blank = dashboard only)')
-        if device and not device.startswith(('http://', 'https://')):
-            device = 'http://' + device
-        try:
-            device = device and device_address(device)
-        except ValueError as error:
-            print(error, file=sys.stderr)
-            return 1
+        raw_devices = args.device_url if isinstance(args.device_url, list) else ([args.device_url] if args.device_url else None)
+        if raw_devices is None and interactive:
+            ans = ask('Clock address shown on the clock screen, e.g. 192.168.0.50 (blank = dashboard only)')
+            raw_devices = [ans] if ans else []
+        clean_devices = []
+        if raw_devices:
+            for entry in raw_devices:
+                for item in entry.split(','):
+                    item = item.strip()
+                    if item:
+                        if not item.startswith(('http://', 'https://')):
+                            item = 'http://' + item
+                        try:
+                            clean_devices.append(device_address(item))
+                        except ValueError as error:
+                            print(error, file=sys.stderr)
+                            return 1
         config = {'poll_seconds': 300, 'accounts': accounts, 'display_style': 'digital'}
-        if device:
-            config['device_url'] = device
+        if len(clean_devices) == 1:
+            config['device_url'] = clean_devices[0]
+            config['device_urls'] = clean_devices
+        elif len(clean_devices) > 1:
+            config['device_urls'] = clean_devices
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'x') as handle:
             json.dump(config, handle, indent=2)
@@ -260,8 +296,8 @@ def start(args):
     if not args.no_browser:
         import threading
         import webbrowser
-        threading.Timer(1.5, webbrowser.open, ['http://127.0.0.1:8787']).start()
-    print('Dashboard: http://127.0.0.1:8787  (Ctrl+C to stop)')
+        threading.Timer(1.5, webbrowser.open, ['http://127.0.0.1:8788']).start()
+    print('Dashboard: http://127.0.0.1:8788  (Ctrl+C to stop)')
     from token_tv import live
     sys.argv = ['token-tv start', '--config', str(path), '--state-dir', str(path.parent / 'state')]
     live.main()
@@ -289,10 +325,10 @@ def main(argv=None):
                        help=f'{provider.title()} account email; repeat for accounts B and C')
     s.add_argument('--isolate', action='store_true',
                    help='give every account its own login home instead of reusing your existing CLI login')
-    s.add_argument('--device-url', help='clock address, e.g. http://192.168.0.50')
+    s.add_argument('--device-url', action='append', help='clock address, e.g. http://192.168.0.50 (repeat for multiple clocks)')
     s.add_argument('--yes', action='store_true', help='do not ask; use only the flags given')
     st = commands.add_parser('start', parents=[config], help='find your signed-in CLIs, ask for the clock, and run')
-    st.add_argument('--device-url', help='clock address, e.g. 192.168.0.50')
+    st.add_argument('--device-url', action='append', help='clock address, e.g. 192.168.0.50 (repeat for multiple clocks)')
     st.add_argument('--yes', action='store_true', help='accept every signed-in account without asking')
     st.add_argument('--no-browser', action='store_true', help='do not open the dashboard in a browser')
     o = commands.add_parser('doctor', parents=[config], help='check CLIs and logins')

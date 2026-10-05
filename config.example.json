@@ -28,7 +28,23 @@
       "provider": "grok",
       "email": "your-grok-email@example.com",
       "source_home": "~/.grok"
+    },
+    {
+      "key": "gemini_a",
+      "alias": "GEMINI A",
+      "provider": "gemini",
+      "email": "your-google-email@example.com",
+      "source_home": "~/.gemini"
     }
   ],
-  "display_style": "pixel"
+  "display_style": "pixel",
+  "device_urls": [
+    "http://10.0.0.128",
+    {
+      "url": "http://10.0.0.129",
+      "name": "Office Clock",
+      "style": "retro"
+    }
+  ]
 }
+

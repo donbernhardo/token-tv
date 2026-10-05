@@ -7,8 +7,8 @@ const THEMES = [
  {id:'hud', name:'Sci-Fi HUD', eyebrow:'', title:'AI PROVIDER USAGE', note:'Real-time usage monitor'}
 ];
 const STATUS = {ok:'Connected', loading:'Loading', auth_required:'Login needed', identity_mismatch:'Check identity', quota_unavailable:'Quota unavailable', stale:'OLD · Previous value', rate_limited:'Retry later', error:'Fetch failed'};
-const PROVIDERS = ['claude', 'codex', 'grok'];
-const COMPANIES = {claude:'ANTHROPIC', codex:'OPENAI', grok:'XAI'};
+const PROVIDERS = ['claude', 'codex', 'grok', 'gemini'];
+const COMPANIES = {claude:'ANTHROPIC', codex:'OPENAI', grok:'XAI', gemini:'GOOGLE'};
 const svgNS = 'http://www.w3.org/2000/svg';
 const $ = s => document.querySelector(s);
 const readPreference = (k, f) => {try {return JSON.parse(localStorage.getItem(k)) ?? f} catch {return f}};
@@ -35,6 +35,8 @@ function icon(provider) {
  } else if (provider === 'codex') {
   s.append(svgNode('path', {d:'M24 5 40.5 14.5V33.5L24 43 7.5 33.5V14.5Z', 'stroke-width':3.2}));
   s.append(svgNode('path', {d:'M7.5 14.5 24 24 40.5 14.5M24 24V43', 'stroke-width':3.2}));
+ } else if (provider === 'gemini') {
+  s.append(svgNode('path', {d:'M24 4 C24 16 28 20 40 24 C28 28 24 32 24 44 C24 32 20 28 8 24 C20 20 24 16 24 4 Z', fill:'currentColor', stroke:'none'}));
  } else {
   s.append(svgNode('circle', {cx:24, cy:24, r:12.5, 'stroke-width':3.4}));
   s.append(svgNode('path', {d:'M5 43C17 33 31 19 43 5 34 19 21 32 5 43Z', fill:'currentColor', stroke:'currentColor', 'stroke-width':1.6}));
@@ -54,7 +56,7 @@ function clockGlyph() {
 /* Pixel Retro scenery on a 200×62 logical grid, anchored bottom-right. Sky objects sit
  * near x≈138 so they fall between the title row and the score column. */
 function scene(provider) {
- const W = 200, H = 62, rnd = seeded({claude:11, codex:23, grok:37}[provider]);
+ const W = 200, H = 62, rnd = seeded({claude:11, codex:23, grok:37, gemini:49}[provider]);
  const s = svgNode('svg', {viewBox:`0 0 ${W} ${H}`, preserveAspectRatio:'xMaxYMax slice', 'shape-rendering':'crispEdges', class:'scene', 'aria-hidden':'true'});
  const rect = (x, y, w, h, fill, cls) => {const r = svgNode('rect', {x, y, width:w, height:h, fill}); if (cls) r.setAttribute('class', cls); s.append(r)};
  const bands = colors => colors.forEach((c, i) => rect(0, Math.floor(i * H / colors.length), W, Math.ceil(H / colors.length) + 1, c));
@@ -78,6 +80,16 @@ function scene(provider) {
   while (x < W) {const w = 6 + Math.floor(rnd() * 7), h = 10 + Math.floor(rnd() * 13); rect(x, 52 - h, w, h + 10, '#0b3530'); for (let wy = 54 - h; wy < 50; wy += 3) for (let wx = x + 1; wx < x + w - 1; wx += 2) if (rnd() > .55) rect(wx, wy, 1, 1, rnd() > .7 ? '#e8ffa6' : '#7dffb9'); x += w + 2}
   for (let p = 0; p < W; p += 5) pine(p + 2, 58, 6 + Math.floor(rnd() * 5), '#05201a');
   for (let i = 0; i < 9; i++) rect(60 + Math.floor(rnd() * 138), 38 + Math.floor(rnd() * 12), 1, 1, '#c8ff8a', 'twinkle');
+ } else if (provider === 'gemini') {
+  bands(['#0a1428', '#0e1c38', '#14274c', '#1b3464', '#23447f', '#2d579d', '#396bb8', '#4285f4']);
+  stars(50, 0, 46, ['#8ab4f8', '#c2e7ff', '#ffffff']);
+  disc(138, 15, 6, '#4285f4'); disc(138, 15, 3, '#ffffff');
+  for (let i = -8; i <= 8; i++) {
+    rect(138 + i, 15, 1, 1, Math.abs(i) < 4 ? '#ffffff' : '#8ab4f8');
+    rect(138, 15 + i, 1, 1, Math.abs(i) < 4 ? '#ffffff' : '#8ab4f8');
+  }
+  ridge(x => 46 - 4 * Math.sin(x / 8) - 2 * Math.cos(x / 4), '#0c1a36');
+  for (let p = 0; p < W; p += 6) pine(p + 2, 58, 5 + Math.floor(rnd() * 4), '#081226');
  } else {
   bands(['#0d0a28', '#120d33', '#170f3e', '#1c1349', '#211654', '#271a5f', '#2d1e6a', '#33226f']);
   stars(80, 0, 46, ['#efe6ff', '#b9a6ff', '#ffffff']);
@@ -238,7 +250,25 @@ function paintClock(forceImage = false) {
  const style = clockChoice || displayInfo?.style;
  $('#clock-style').disabled = applying || !displayInfo; $('#apply').disabled = DEMO || applying || !displayInfo || (style === displayInfo.style && displayInfo.status !== 'error' && !clockError);
  $('#apply').textContent = applying ? 'Sending image…' : 'Apply to clock'; $('#apply').dataset.state = applying ? 'loading' : clockError || displayInfo?.status === 'error' ? 'error' : displayInfo?.status === 'ok' ? 'success' : 'default';
- $('#display-state').textContent = DEMO ? 'Demo · install TokenTV to drive a real clock' : clockError ? 'Could not apply. Please retry.' : !displayInfo ? 'Clock status unavailable' : style !== displayInfo.style ? 'Preview only · Apply to send' : displayInfo.status === 'queued' ? 'Sending image…' : displayInfo.status === 'error' ? 'Clock upload failed. Please retry.' : displayInfo.status === 'preview_only' ? 'Preview only · No clock connected' : 'Image sent · ' + styleName(displayInfo.applied_style);
+ $('#display-state').textContent = DEMO ? 'Demo · install TokenTV to drive a real clock' : clockError ? 'Could not apply. Please retry.' : !displayInfo ? 'Clock status unavailable' : style !== displayInfo.style ? 'Preview only · Apply to send' : displayInfo.status === 'queued' ? 'Sending image…' : displayInfo.status === 'error' ? 'Clock upload failed. Please retry.' : displayInfo.status === 'offline' ? 'Clock unreachable · Offline' : displayInfo.status === 'preview_only' ? 'Preview only · No clock connected' : 'Image sent · ' + styleName(displayInfo.applied_style);
+ const targets = displayInfo?.targets;
+ const targetList = $('#clock-targets');
+ if (targetList && targets && targets.length > 0) {
+  targetList.hidden = false;
+  targetList.innerHTML = '';
+  for (const t of targets) {
+   const row = el('div', undefined, 'target-row');
+   const dot = el('span', undefined, 'target-dot status-' + (t.status === 'ok' ? 'ok' : t.status === 'offline' ? 'offline' : 'queued'));
+   dot.title = t.status === 'ok' ? 'Online & Synced' : t.status === 'offline' ? 'Offline (Unreachable)' : 'Queued';
+   const name = el('span', t.name || t.url.replace(/^https?:\/\//, ''), 'target-name');
+   const badge = el('span', styleName(t.style), 'target-badge');
+   const st = el('span', t.status === 'ok' ? 'Online' : t.status === 'offline' ? 'Offline' : 'Pending', 'target-status-label');
+   row.append(dot, name, badge, st);
+   targetList.append(row);
+  }
+ } else if (targetList) {
+  targetList.hidden = true;
+ }
  if (style && !$('#clock-panel').hidden && (forceImage || style !== lastImageStyle || Date.now() - lastImageAt > 30000)) {lastImageStyle = style; lastImageAt = Date.now(); $('#frame').src = DEMO ? displayInfo.frames?.[style] || `/frames/${encodeURIComponent(style)}.jpg` : '/frame/0.jpg?style=' + encodeURIComponent(style) + '&t=' + lastImageAt; $('#frame').alt = styleName(style) + ' live clock preview'}
 }
 const styleName = s => s === 'retro' ? 'Pixel Retro' : s === 'hud' ? 'Sci-Fi HUD' : s ? s[0].toUpperCase() + s.slice(1) : 'Unknown';

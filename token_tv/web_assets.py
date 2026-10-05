@@ -20,6 +20,7 @@ ASSETS = {
     '/assets/claude-pixel.png': (ROOT / 'assets' / 'claude-pixel.png', 'image/png'),
     '/assets/codex-pixel.png': (ROOT / 'assets' / 'codex-pixel.png', 'image/png'),
     '/assets/grok-pixel.png': (ROOT / 'assets' / 'grok-pixel.png', 'image/png'),
+    '/assets/gemini-pixel.png': (ROOT / 'assets' / 'gemini-pixel.png', 'image/png'),
 }
 
 

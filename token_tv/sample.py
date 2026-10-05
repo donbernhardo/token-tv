@@ -9,6 +9,7 @@ SAMPLE = [
     ('codex_b', 'CODEX B', 'codex', [('WEEK', 91, D + 4 * H)]),
     ('grok_a', 'GROK A', 'grok', [('BUDGET', 61, 6 * D + 2 * H)]),
     ('grok_b', 'GROK B', 'grok', [('BUDGET', 18, 12 * D + 3 * H)]),
+    ('gemini_a', 'GEMINI A', 'gemini', [('5H', 8, 4 * H + 18 * 60), ('WEEK', 12, 3 * D + 4 * H)]),
 ]
 
 
@@ -21,5 +22,7 @@ def snapshot(now=None, sample=SAMPLE):
             row['fetched_at'] = row['last_success_at'] = now
             for window in row['windows']:
                 window['resets_at'] = now + window['resets_in']
+        if provider == 'codex' and key == 'codex_a':
+            row['banked_resets'] = {'count': 1, 'earliest_expires_at': (now or 1790702555) + 24 * D}
         accounts[key] = row
     return {'schema': 1, 'updated_at': now or 0, 'accounts': accounts}

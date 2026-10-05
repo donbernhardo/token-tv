@@ -12,9 +12,18 @@ import time
 import unicodedata
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from token_tv.usage import normalize_claude, normalize_codex, normalize_grok, timestamp, window
+from token_tv.usage import (
+    extract_codex_banked_resets,
+    normalize_claude,
+    normalize_codex,
+    normalize_gemini,
+    normalize_grok,
+    timestamp,
+    window,
+)
 from token_tv.display import STYLES
 
 
@@ -32,9 +41,10 @@ class SourceError(Exception):
 def scoped_env(provider, root):
     env = dict(os.environ)
     for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-                "GROK_OAUTH_TOKEN", "GROK_API_KEY", "XAI_API_KEY", "GROK_AUTH_TOKEN", "CLAUDECODE"):
+                "GROK_OAUTH_TOKEN", "GROK_API_KEY", "XAI_API_KEY", "GROK_AUTH_TOKEN", "CLAUDECODE",
+                "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         env.pop(key, None)
-    variable = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "grok": "GROK_HOME"}[provider]
+    variable = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "grok": "GROK_HOME", "gemini": "GEMINI_HOME"}[provider]
     env[variable] = str(root)
     if provider == "claude":
         env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = str(root)
@@ -104,18 +114,69 @@ class RPC:
         self.reader.join(timeout=1)
 
 
+def normalize_device_targets(config):
+    """Return a list of validated target display dictionaries: [{'url': ..., 'style': ..., 'name': ...}]."""
+    targets = []
+    global_style = config.get("display_style", "pixel")
+    raw_urls = config.get("device_urls")
+    if raw_urls is None and config.get("device_url"):
+        raw_urls = [config["device_url"]]
+    elif raw_urls is None:
+        raw_urls = []
+    elif isinstance(raw_urls, str):
+        raw_urls = [u.strip() for u in raw_urls.split(",") if u.strip()]
+
+    if not isinstance(raw_urls, list):
+        raise ValueError("device_urls must be a list or URL string")
+
+    seen = set()
+    for entry in raw_urls:
+        if isinstance(entry, str):
+            url = entry.strip()
+            item_style = None
+            name = None
+        elif isinstance(entry, dict):
+            url = str(entry.get("url", "")).strip()
+            item_style = entry.get("style")
+            name = entry.get("name")
+            if item_style and item_style not in STYLES:
+                raise ValueError(f"Unknown display style: {item_style}")
+        else:
+            raise ValueError("Each device target must be a URL string or an object with 'url'")
+
+        if not url:
+            continue
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = "http://" + url
+        parsed = urlparse(url)
+        if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.path not in ("", "/"):
+            raise ValueError(f"A plain local display URL is required: {url}")
+        clean_url = url.rstrip("/")
+        if clean_url in seen:
+            continue
+        seen.add(clean_url)
+        targets.append({
+            "url": clean_url,
+            "style": item_style or global_style,
+            "configured_style": item_style,
+            "name": name or parsed.hostname,
+        })
+    return targets
+
+
 def load_config(path):
     data = json.loads(Path(path).read_text())
-    if set(data) - {"accounts", "device_url", "poll_seconds", "font", "display_style"}:
+    if set(data) - {"accounts", "device_url", "device_urls", "poll_seconds", "font", "display_style"}:
         raise ValueError("Unsupported configuration field")
     if data.get('display_style', 'pixel') not in STYLES:
         raise ValueError('Unknown display style')
+    normalize_device_targets(data)
     seen = set()
     allowed = {"key", "alias", "provider", "source_home", "email", "snapshot_file", "fallback_snapshot_file", "refresh_with_cli"}
     for account in data.get("accounts", []):
         if set(account) - allowed:
             raise ValueError("Only credential-free account metadata is allowed")
-        if account.get("provider") not in ("claude", "codex", "grok"):
+        if account.get("provider") not in ("claude", "codex", "grok", "gemini"):
             raise ValueError("Unknown provider")
         key = account.get("key", "")
         if not re.fullmatch(r"[a-z0-9_-]{1,48}", key) or key in seen:
@@ -233,6 +294,47 @@ def grok_payload(account):
         rpc.close()
 
 
+def gemini_payload(account):
+    root = Path(account.get("source_home", "~/.gemini")).expanduser()
+    cmd = [exe(os.environ.get("TOKEN_TV_GEMINI_BIN", "agy")), "-p", "/usage", "--output-format", "json"]
+    env = scoped_env("gemini", root)
+    result = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+    if result.returncode != 0:
+        raise SourceError("auth_required" if "auth" in result.stderr.lower() else "source_unavailable")
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        if "quota" in result.stdout.lower() or "gemini" in result.stdout.lower():
+            return {"response": result.stdout}
+        raise SourceError("source_unavailable")
+
+
+def gemini_identity(account):
+    root = Path(account.get("source_home", "~/.gemini")).expanduser()
+    for name in ("auth.json", "oauth_creds.json", "identity.json", ".credentials.json"):
+        path = root / name
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text())
+                emails = set()
+                def scan(value):
+                    if isinstance(value, dict):
+                        if isinstance(value.get("email"), str):
+                            emails.add(value["email"].strip().casefold())
+                        for item in value.values():
+                            if isinstance(item, (dict, list)):
+                                scan(item)
+                    elif isinstance(value, list):
+                        for item in value:
+                            scan(item)
+                scan(data)
+                if len(emails) == 1:
+                    return emails.pop()
+            except (OSError, ValueError):
+                pass
+    return None
+
+
 def logged_in_email(provider, home):
     """The email of the account already signed in to this CLI home, or None. Prints nothing secret."""
     root = Path(home).expanduser()
@@ -254,6 +356,8 @@ def logged_in_email(provider, home):
                 return identity.get("email") if identity.get("type") == "chatgpt" else None
             finally:
                 rpc.close()
+        if provider == "gemini":
+            return gemini_identity({"source_home": str(root)})
         return grok_identity({"source_home": str(root)})
     except (SourceError, OSError, ValueError, KeyError, TypeError, HTTPError, subprocess.SubprocessError):
         return None
@@ -302,6 +406,8 @@ def imported_row(account):
                       value.get("duration_minutes"))
         if item:
             clean["windows"].append(item)
+    if "banked_resets" in row:
+        clean["banked_resets"] = row["banked_resets"]
     if time.time() - fetched > 900:
         clean["status"] = "stale"
         clean["error_code"] = "laptop_offline"
@@ -322,8 +428,19 @@ def fetch_account(account):
             row["windows"] = normalize_claude(data)
             row["identity_verified"] = True
         elif account["provider"] == "codex":
-            row["windows"] = normalize_codex(codex_payload(account))
+            payload = codex_payload(account)
+            row["windows"] = normalize_codex(payload)
+            banked = extract_codex_banked_resets(payload)
+            if banked:
+                row["banked_resets"] = banked
             row["identity_verified"] = True
+        elif account["provider"] == "gemini":
+            identity = gemini_identity(account)
+            if identity and not identity_matches(account["email"], identity):
+                raise SourceError("identity_mismatch")
+            data = gemini_payload(account)
+            row["windows"] = normalize_gemini(data)
+            row["identity_verified"] = bool(identity or row["windows"])
         else:
             if not identity_matches(account["email"], grok_identity(account)):
                 raise SourceError("identity_mismatch")

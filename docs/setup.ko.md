@@ -22,7 +22,7 @@ pipx install git+https://github.com/click6067-ship-it/token-tv
 token-tv demo     # 로그인 없이 샘플 데이터로 모든 시계 화면을 렌더
 token-tv setup         # 공급자당 최대 3계정 이메일과 시계 IP만 묻고, 기존 설정은 덮어쓰지 않음
 token-tv doctor --live # 지금 각 공급자에 조회해 빠진 CLI·로그인과 해결 명령을 안내
-token-tv run      # 대시보드 http://127.0.0.1:8787 + 시계 전송
+token-tv run      # 대시보드 http://127.0.0.1:8788 + 시계 전송
 ```
 
 설정 파일은 `~/.config/token-tv/config.json`이며 모든 명령이 `--config`를 받습니다.
@@ -39,7 +39,7 @@ A 계정은 평소 쓰던 로그인(`~/.claude` 등)을 재사용할 수 있고,
 macOS(실기기 미검증): Claude Code가 로그인을 Keychain에 두므로, CLI 홈에
 `.credentials.json`이 없으면 `security`로 읽기 전용 조회합니다. 이메일 대조는 그대로 합니다.
 
-브라우저: `http://127.0.0.1:8787/`. `/snapshot`과 `/snapshot/<key>`는 JSON,
+브라우저: `http://127.0.0.1:8788/`. `/snapshot`과 `/snapshot/<key>`는 JSON,
 `/frame/0.jpg`는 시계와 같은 240×240 JPEG이며 `/frame/1.jpg`는 호환 별칭입니다.
 시계는 Claude·Codex·Grok 각각 한 계정을 세 행으로 보여줍니다. 픽셀 아이콘, 큰 사용률 숫자, 막대, 기간 및 리셋 시간을 표시합니다.
 실제 사용량을 제공하는 첫 계정을 선택하며 계정 전환은 수행하지 않습니다. Claude/Codex는 가장 높은 기간 사용률을 표시합니다.

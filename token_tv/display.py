@@ -19,7 +19,7 @@ TEXT = '#d9dde1'
 MUTED = TEXT
 TRACK = '#28313a'
 RULE = '#202730'
-PROVIDER_INK = {'claude': '#d68e68', 'codex': '#a799e5', 'grok': '#cbd1d7'}
+PROVIDER_INK = {'claude': '#d68e68', 'codex': '#a799e5', 'grok': '#cbd1d7', 'gemini': '#4e82ee'}
 ICON_PAPER = PROVIDER_INK['grok']
 FONT_MAIN = '/usr/share/fonts/truetype/dejavu/DejaVuSans'
 FONT_NUMBERS = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono'
@@ -28,7 +28,7 @@ STYLES = ('pixel', 'digital', 'neon', 'retro', 'hud', 'space')
 GAUGE_LEVELS = ((50, '#76a99a'), (80, '#93c9b9'), (90, '#d1b275'), (101, '#d8877e'))
 STATUS = {'loading': 'WAIT', 'auth_required': 'LOGIN', 'identity_mismatch': 'CHECK',
           'quota_unavailable': 'NO DATA', 'error': 'ERROR', 'rate_limited': 'RETRY', 'stale': 'OLD'}
-PROVIDERS = ('claude', 'codex', 'grok')
+PROVIDERS = ('claude', 'codex', 'grok', 'gemini')
 ASSETS = Path(__file__).with_name('assets')
 
 

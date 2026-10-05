@@ -9,23 +9,48 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from token_tv.usage import normalize_claude, normalize_codex, normalize_grok
-from token_tv.sources import fetch_account, load_config, grok_identity, scoped_env
+from token_tv.usage import (
+    extract_codex_banked_resets,
+    normalize_claude,
+    normalize_codex,
+    normalize_gemini,
+    normalize_grok,
+)
+from token_tv.sources import fetch_account, load_config, grok_identity, gemini_identity, scoped_env
 from token_tv.state import UsageStore
 from token_tv.display import render_page, pages, overview_rows, primary_window
 
 
 class LiveTests(unittest.TestCase):
     def test_provider_cli_environment_does_not_inherit_other_authentication(self):
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "DO-NOT-INHERIT", "GROK_OAUTH_TOKEN": "DO-NOT-INHERIT", "CLAUDE_CODE_OAUTH_TOKEN": "DO-NOT-INHERIT"}):
-            for provider, variable in (("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME"), ("grok", "GROK_HOME")):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "DO-NOT-INHERIT", "GROK_OAUTH_TOKEN": "DO-NOT-INHERIT", "CLAUDE_CODE_OAUTH_TOKEN": "DO-NOT-INHERIT", "GEMINI_API_KEY": "DO-NOT-INHERIT"}):
+            for provider, variable in (("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME"), ("grok", "GROK_HOME"), ("gemini", "GEMINI_HOME")):
                 env = scoped_env(provider, "/explicit/account/home")
                 self.assertEqual(env[variable], "/explicit/account/home")
-                self.assertFalse(any(key in env for key in ("OPENAI_API_KEY", "GROK_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")))
+                self.assertFalse(any(key in env for key in ("OPENAI_API_KEY", "GROK_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "GEMINI_API_KEY")))
 
     def test_codex_uses_reported_window_duration(self):
         data = {"rateLimits": {"primary": {"usedPercent": 78, "windowDurationMins": 10080, "resetsAt": 2000000000}, "secondary": None}}
         self.assertEqual(normalize_codex(data), [{"label": "WEEK", "used_percent": 78.0, "resets_at": 2000000000, "duration_minutes": 10080}])
+
+    def test_codex_extracts_banked_resets(self):
+        data = {
+            "rateLimits": {"primary": {"usedPercent": 20, "windowDurationMins": 300, "resetsAt": 2000000000}},
+            "rateLimitResetCredits": {
+                "availableCount": 2,
+                "credits": [
+                    {"status": "available", "expiresAt": 1793294555},
+                    {"status": "available", "expiresAt": 1793500000},
+                ],
+            },
+        }
+        banked = extract_codex_banked_resets(data)
+        self.assertIsNotNone(banked)
+        self.assertEqual(banked["count"], 2)
+        self.assertEqual(banked["earliest_expires_at"], 1793294555)
+
+        self.assertIsNone(extract_codex_banked_resets({"rateLimitResetCredits": {"availableCount": 0}}))
+        self.assertIsNone(extract_codex_banked_resets({}))
 
     def test_missing_grok_quota_is_unknown(self):
         self.assertEqual(normalize_grok({"config": {"currentPeriod": {"end": "2026-10-05T00:00:00Z"}}}), [])
@@ -56,6 +81,51 @@ class LiveTests(unittest.TestCase):
             with patch("token_tv.sources.grok_payload") as billing:
                 row = fetch_account(account)
             billing.assert_not_called()
+            self.assertEqual(row["status"], "identity_mismatch")
+            self.assertNotIn("NEVER-EXPORT", json.dumps(row))
+
+    def test_gemini_normalizes_agy_quota(self):
+        sample = {
+            "command": {
+                "name": "usage",
+                "data": {
+                    "groups": [{
+                        "name": "Gemini Models",
+                        "buckets": [
+                            {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.88, "reset_time": "2026-10-08T14:28:50Z"},
+                            {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.92, "reset_time": "2026-10-05T14:18:55Z"}
+                        ]
+                    }]
+                }
+            }
+        }
+        windows = normalize_gemini(sample)
+        self.assertEqual(len(windows), 2)
+        self.assertEqual(windows[0]["label"], "5H")
+        self.assertEqual(windows[0]["used_percent"], 8.0)
+        self.assertEqual(windows[0]["duration_minutes"], 300)
+        self.assertEqual(windows[1]["label"], "WEEK")
+        self.assertEqual(windows[1]["used_percent"], 12.0)
+        self.assertEqual(windows[1]["duration_minutes"], 10080)
+
+        # Fallback text format
+        text_data = {"response": "Gemini Models\tWeekly Limit Remaining\t88%\t2026-10-08 16:28 CEST\nGemini Models\tFive Hour Limit Remaining\t92%\t2026-10-05 16:18 CEST"}
+        text_windows = normalize_gemini(text_data)
+        self.assertEqual(len(text_windows), 2)
+        self.assertEqual(text_windows[0]["label"], "5H")
+        self.assertEqual(text_windows[0]["used_percent"], 8.0)
+        self.assertEqual(text_windows[1]["label"], "WEEK")
+        self.assertEqual(text_windows[1]["used_percent"], 12.0)
+
+    def test_gemini_owner_identity_must_match_expected_email(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "oauth_creds.json"
+            path.write_text(json.dumps({"account": {"email": "owner@google.com", "token": "NEVER-EXPORT"}}))
+            self.assertEqual(gemini_identity({"source_home": directory}), "owner@google.com")
+            account = {"key": "g", "alias": "GEMINI A", "provider": "gemini", "source_home": directory, "email": "wrong@google.com"}
+            with patch("token_tv.sources.gemini_payload") as payload_mock:
+                row = fetch_account(account)
+            payload_mock.assert_not_called()
             self.assertEqual(row["status"], "identity_mismatch")
             self.assertNotIn("NEVER-EXPORT", json.dumps(row))
 
@@ -142,6 +212,89 @@ class LiveTests(unittest.TestCase):
         self.assertIsNone(primary_window({"windows": []}))
         self.assertEqual(primary_window({"windows": [{"label": "BUDGET", "used_percent": 100}]})["label"], "BUDGET")
 
+    def test_normalize_device_targets_and_preferences(self):
+        from token_tv.sources import normalize_device_targets
+        from token_tv.live import DisplayPreferences
+
+        c1 = {"accounts": [{"key": "a", "alias": "A", "provider": "codex", "email": "a@x.com"}],
+              "device_url": "http://10.0.0.128", "display_style": "hud"}
+        t1 = normalize_device_targets(c1)
+        self.assertEqual(len(t1), 1)
+        self.assertEqual(t1[0]["url"], "http://10.0.0.128")
+        self.assertEqual(t1[0]["style"], "hud")
+
+        c2 = {
+            "accounts": [{"key": "a", "alias": "A", "provider": "codex", "email": "a@x.com"}],
+            "display_style": "hud",
+            "device_urls": [
+                "http://10.0.0.128",
+                {"url": "http://10.0.0.129", "style": "retro", "name": "Office"},
+            ],
+        }
+        t2 = normalize_device_targets(c2)
+        self.assertEqual(len(t2), 2)
+        self.assertEqual(t2[0]["url"], "http://10.0.0.128")
+        self.assertEqual(t2[0]["style"], "hud")
+        self.assertIsNone(t2[0]["configured_style"])
+        self.assertEqual(t2[1]["url"], "http://10.0.0.129")
+        self.assertEqual(t2[1]["style"], "retro")
+        self.assertEqual(t2[1]["name"], "Office")
+
+        with tempfile.NamedTemporaryFile("w") as tf:
+            tf.write(json.dumps(c2))
+            tf.flush()
+            prefs = DisplayPreferences(tf.name, c2)
+            snap = prefs.snapshot()
+            self.assertEqual(len(snap["targets"]), 2)
+            self.assertEqual(snap["status"], "queued")
+
+            prefs.update_target("http://10.0.0.128", "ok", applied_style="hud")
+            prefs.update_target("http://10.0.0.129", "offline")
+            snap2 = prefs.snapshot()
+            self.assertEqual(snap2["status"], "ok")
+            t_map = {t["url"]: t for t in snap2["targets"]}
+            self.assertEqual(t_map["http://10.0.0.128"]["status"], "ok")
+            self.assertEqual(t_map["http://10.0.0.129"]["status"], "offline")
+
+    def test_multi_device_liveness_skips_offline_and_updates_online(self):
+        from token_tv.device import PhotoDisplay
+        from token_tv.live import DisplayPreferences
+        from token_tv.sources import normalize_device_targets
+
+        config = {
+            "accounts": [{"key": "a", "alias": "A", "provider": "codex", "email": "a@x.com"}],
+            "display_style": "hud",
+            "device_urls": [
+                "http://10.0.0.128",
+                {"url": "http://10.0.0.129", "style": "retro", "name": "Desk 2"},
+            ],
+        }
+        with tempfile.NamedTemporaryFile("w") as tf:
+            tf.write(json.dumps(config))
+            tf.flush()
+            prefs = DisplayPreferences(tf.name, config)
+            targets = normalize_device_targets(config)
+            dev1 = PhotoDisplay("http://10.0.0.128")
+            dev2 = PhotoDisplay("http://10.0.0.129")
+            with patch.object(dev1, "is_alive", return_value=True), \
+                 patch.object(dev2, "is_alive", return_value=False), \
+                 patch.object(dev1, "upload", return_value={"name": "tokentv.jpg"}), \
+                 patch.object(dev2, "upload") as dev2_upload:
+                devices = {"http://10.0.0.128": dev1, "http://10.0.0.129": dev2}
+                for t in targets:
+                    dev = devices[t["url"]]
+                    if not dev.is_alive(timeout=2.0):
+                        prefs.update_target(t["url"], "offline")
+                    else:
+                        dev.upload("tokentv.jpg", b"image")
+                        prefs.update_target(t["url"], "ok", applied_style=t["style"])
+
+                dev2_upload.assert_not_called()
+                snap = prefs.snapshot()
+                self.assertEqual(snap["targets"][0]["status"], "ok")
+                self.assertEqual(snap["targets"][1]["status"], "offline")
+
 
 if __name__ == "__main__":
     unittest.main()
+

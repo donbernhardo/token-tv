@@ -61,7 +61,7 @@ def make_handler(accounts: tuple[Account, ...], providers: dict[str, Provider]):
 def main():
     parser = argparse.ArgumentParser(description="TokenTV mock usage daemon")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--port", type=int, default=8788)
     args = parser.parse_args()
     with ThreadingHTTPServer((args.host, args.port), make_handler(MOCK_ACCOUNTS, {
         "claude": MockProvider(),

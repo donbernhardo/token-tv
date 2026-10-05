@@ -82,6 +82,103 @@ class DisplayTests(unittest.TestCase):
             server.server_close()
             thread.join()
 
+    def test_geekmagic_upload_and_activate_and_restore(self):
+        calls = []
+        state = {"theme": 1, "autoplay": 1, "i_i": 5, "img": "/image/original.jpg"}
+
+        class GeekMagicHandler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                return
+            def do_GET(self):
+                calls.append(("GET", self.path, b""))
+                url = urlparse(self.path)
+                if url.path == "/theme/list":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                if url.path == "/v.json":
+                    body = json.dumps({"m": "SmallTV-Ultra", "v": "Ultra-V9.0.43"}).encode()
+                elif url.path == "/app.json":
+                    body = json.dumps({"theme": state["theme"]}).encode()
+                elif url.path == "/album.json":
+                    body = json.dumps({"autoplay": state["autoplay"], "i_i": state["i_i"]}).encode()
+                elif url.path == "/img.json":
+                    body = json.dumps({"img": state["img"]}).encode()
+                elif url.path == "/set":
+                    query = parse_qs(url.query)
+                    if "theme" in query:
+                        state["theme"] = int(query["theme"][0])
+                    if "autoplay" in query:
+                        state["autoplay"] = int(query["autoplay"][0])
+                    if "img" in query:
+                        state["img"] = query["img"][0]
+                    body = b"OK"
+                else:
+                    body = b"OK"
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls.append(("POST", self.path, body))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), GeekMagicHandler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            display = PhotoDisplay(f"http://127.0.0.1:{server.server_port}")
+            original = display.capture()
+            self.assertEqual(original["device_kind"], "geekmagic")
+            self.assertEqual(original["theme"], 1)
+            self.assertEqual(original["autoplay"], 1)
+
+            display.upload("tokentv.jpg", b"EXACT-JPEG")
+            display.activate(original, "tokentv.jpg")
+            self.assertEqual(state["theme"], 3)
+            self.assertEqual(state["autoplay"], 0)
+            self.assertEqual(state["img"], "/image/tokentv.jpg")
+
+            display.restore(original)
+            self.assertEqual(state["theme"], 1)
+            self.assertEqual(state["autoplay"], 1)
+            self.assertEqual(state["img"], "/image/original.jpg")
+
+            uploads = [c for c in calls if c[0] == "POST"]
+            self.assertEqual(len(uploads), 1)
+            self.assertEqual(uploads[0][1], "/doUpload?dir=/image/")
+            self.assertIn(b'name="file"; filename="tokentv.jpg"', uploads[0][2])
+            self.assertIn(b"\r\n\r\nEXACT-JPEG\r\n", uploads[0][2])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_is_alive_online_and_offline(self):
+        class PingHandler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                return
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), PingHandler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            port = server.server_port
+            display = PhotoDisplay(f"http://127.0.0.1:{port}")
+            self.assertTrue(display.is_alive(timeout=1.0))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+        offline_display = PhotoDisplay(f"http://127.0.0.1:{port}")
+        self.assertFalse(offline_display.is_alive(timeout=0.2))
+
 
 if __name__ == "__main__":
     unittest.main()

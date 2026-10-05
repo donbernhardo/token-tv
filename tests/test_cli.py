@@ -170,7 +170,8 @@ class ConnectGuardTest(unittest.TestCase):
                                                      'email': 'a@example.com', 'source_home': '~/.codex'}]}))
         with mock.patch.dict(os.environ, {'HOME': str(home)}), \
                 mock.patch.object(connect.subprocess, 'run') as login, \
-                mock.patch.object(connect.sys, 'argv', ['connect', '--config', str(config), '--account', 'codex_a']):
+                mock.patch.object(connect.sys, 'argv', ['connect', '--config', str(config), '--account', 'codex_a']), \
+                mock.patch.object(connect.sys.stdin, 'isatty', return_value=False):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 connect.main()
@@ -186,7 +187,8 @@ class ConnectGuardTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {'HOME': str(home)}), \
                 mock.patch.object(connect.sys, 'platform', 'darwin'), \
                 mock.patch.object(connect.subprocess, 'run') as login, \
-                mock.patch.object(connect.sys, 'argv', ['connect', '--config', str(config), '--account', 'claude_a']):
+                mock.patch.object(connect.sys, 'argv', ['connect', '--config', str(config), '--account', 'claude_a']), \
+                mock.patch.object(connect.sys.stdin, 'isatty', return_value=False):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 connect.main()
@@ -203,7 +205,7 @@ class StartTest(unittest.TestCase):
         with mock.patch.object(cli, 'cli_path', return_value='/usr/bin/x'), \
                 mock.patch.object(cli, 'login_state', side_effect=lambda p, h: 'yes' if p != 'grok' else 'no'), \
                 mock.patch('token_tv.sources.logged_in_email',
-                           side_effect=lambda p, h: {'claude': 'me@example.com', 'codex': None}[p]) as detect, \
+                           side_effect=lambda p, h: {'claude': 'me@example.com', 'codex': None, 'gemini': None}.get(p)) as detect, \
                 mock.patch.object(live, 'main') as run:
             code, out, err = run_cli('start', '--config', str(self.config), '--yes', '--no-browser', *extra)
         return code, out, err, detect, run
@@ -214,6 +216,7 @@ class StartTest(unittest.TestCase):
         data = json.loads(self.config.read_text())
         self.assertEqual([(a['provider'], a['email']) for a in data['accounts']], [('claude', 'me@example.com')])
         self.assertEqual(data['device_url'], 'http://192.168.0.50')  # bare IP is accepted
+        self.assertIn('http://127.0.0.1:8788', out)
         run.assert_called_once()
 
     def test_existing_config_skips_detection(self):

@@ -9,7 +9,7 @@ from token_tv.sources import exe, fetch_account, load_config, scoped_env
 
 # provider: (everyday CLI home, file present after login)
 DEFAULT_HOMES = {"claude": ("~/.claude", ".credentials.json"), "codex": ("~/.codex", "auth.json"),
-                 "grok": ("~/.grok", "auth.json")}
+                 "grok": ("~/.grok", "auth.json"), "gemini": ("~/.gemini", "settings.json")}
 
 
 def login_command(account, browser=False):
@@ -18,6 +18,8 @@ def login_command(account, browser=False):
         return [exe("claude"), "auth", "login", "--claudeai", "--email", account["email"]]
     if provider == "codex":
         return [exe("codex"), "login"] if browser else [exe("codex"), "login", "--device-auth"]
+    if provider == "gemini":
+        return [exe(os.environ.get("TOKEN_TV_GEMINI_BIN", "agy"))]
     return [exe(os.environ.get("TOKEN_TV_GROK_BIN", "grok")), "login", "--device-auth"]
 
 

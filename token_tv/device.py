@@ -17,22 +17,88 @@ class PhotoDisplay:
         if parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.path not in ("", "/"):
             raise ValueError("A plain local display URL is required")
         self.base_url = base_url.rstrip("/")
+        self._kind = None
 
     def request(self, path, data=None, headers=None):
         with urlopen(Request(self.base_url + path, data=data, headers=headers or {}), timeout=20) as response:
             body = response.read()
             return response.status, body
 
+    def is_alive(self, timeout=2.0):
+        """Check if the display's HTTP server is reachable and responding."""
+        try:
+            with urlopen(Request(self.base_url + "/"), timeout=timeout) as response:
+                return response.status in (200, 204, 301, 302, 404)
+        except Exception:
+            return False
+
+    def _detect(self):
+        if self._kind is not None:
+            return self._kind
+        try:
+            status, raw = self.request("/theme/list")
+            if status == 200:
+                themes = json.loads(raw)
+                if isinstance(themes, dict) and "themes" in themes:
+                    self._kind = "sd_pro"
+                    return self._kind
+        except Exception:
+            pass
+        self._kind = "geekmagic"
+        return self._kind
+
     def capture(self):
-        _, raw = self.request("/theme/list")
-        themes = json.loads(raw)
-        _, raw = self.request("/photo/list")
-        photos = json.loads(raw)
-        if not any(t["id"] == 2 for t in themes["themes"]):
-            raise ValueError("The confirmed photo theme is missing")
-        return {"themes": themes["themes"], "theme_interval": themes["interval"],
-                "files": [{"name": f["name"], "enabled": f["enabled"]} for f in photos["files"]],
-                "photo_interval": photos["interval"]}
+        try:
+            status, raw = self.request("/theme/list")
+            if status == 200:
+                themes = json.loads(raw)
+                if isinstance(themes, dict) and "themes" in themes:
+                    self._kind = "sd_pro"
+                    _, praw = self.request("/photo/list")
+                    photos = json.loads(praw)
+                    if not any(t["id"] == 2 for t in themes["themes"]):
+                        raise ValueError("The confirmed photo theme is missing")
+                    return {"device_kind": "sd_pro", "themes": themes["themes"], "theme_interval": themes["interval"],
+                            "files": [{"name": f["name"], "enabled": f["enabled"]} for f in photos["files"]],
+                            "photo_interval": photos["interval"]}
+        except (ValueError, KeyError):
+            raise
+        except Exception:
+            pass
+
+        self._kind = "geekmagic"
+        theme = 3
+        try:
+            _, raw = self.request("/app.json")
+            theme = json.loads(raw).get("theme", 3)
+        except Exception:
+            pass
+        autoplay = 0
+        interval = 5
+        try:
+            _, raw = self.request("/album.json")
+            data = json.loads(raw)
+            autoplay = data.get("autoplay", 0)
+            interval = data.get("i_i", 5)
+        except Exception:
+            pass
+        img = ""
+        try:
+            _, raw = self.request("/img.json")
+            img = json.loads(raw).get("img", "")
+        except Exception:
+            pass
+        return {
+            "device_kind": "geekmagic",
+            "theme": theme,
+            "autoplay": autoplay,
+            "i_i": interval,
+            "img": img,
+            "themes": [{"id": 3, "enabled": True}],
+            "files": [{"name": FILES[0], "enabled": True}],
+            "photo_interval": interval,
+            "theme_interval": interval,
+        }
 
     def upload(self, name, image):
         limit, mime = LIMITS.get(name, (0, ""))
@@ -41,7 +107,8 @@ class PhotoDisplay:
         boundary = "TokenTV" + uuid.uuid4().hex
         body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\n'
                 f'Content-Type: {mime}\r\n\r\n').encode() + image + f"\r\n--{boundary}--\r\n".encode()
-        status, _ = self.request("/photo/upload", body,
+        path = "/doUpload?dir=/image/" if (self._kind or self._detect()) == "geekmagic" else "/photo/upload"
+        status, _ = self.request(path, body,
                                  {"Content-Type": "multipart/form-data; boundary=" + boundary})
         return {"file": name, "status": status, "bytes": len(image)}
 
@@ -49,6 +116,11 @@ class PhotoDisplay:
         self.request("/" + category + "/toggle?" + urlencode({key: value, "state": int(enabled)}, quote_via=quote))
 
     def activate(self, original, name=FILES[0]):
+        if (self._kind or (original and original.get("device_kind"))) == "geekmagic":
+            self.request("/set?i_i=5&autoplay=0")
+            self.request(f"/set?img=/image/{name}")
+            self.request("/set?theme=3")
+            return
         # Show only our current file, then select the photo theme; retain old files.
         current = self.capture()
         enabled = {f['name']: f['enabled'] for f in current['files']}
@@ -66,6 +138,15 @@ class PhotoDisplay:
                 self.toggle("theme", "id", t["id"], False)
 
     def restore(self, original):
+        if original.get("device_kind") == "geekmagic":
+            theme = original.get("theme", 1)
+            self.request(f"/set?theme={theme}")
+            if "autoplay" in original:
+                interval = original.get("i_i", 5)
+                self.request(f"/set?i_i={interval}&autoplay={original['autoplay']}")
+            if original.get("img"):
+                self.request(f"/set?img={original['img']}")
+            return
         for f in original["files"]:
             self.toggle("photo", "name", f["name"], f["enabled"])
         _, raw = self.request("/photo/list")

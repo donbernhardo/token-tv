@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,7 +14,7 @@ from token_tv.device import FILES, PhotoDisplay
 from token_tv.catalog import payload as theme_payload
 from token_tv.display import STYLES, render_page
 from token_tv.web_assets import HTML, ASSETS, asset
-from token_tv.sources import load_config
+from token_tv.sources import load_config, normalize_device_targets
 from token_tv.state import UsageStore
 
 
@@ -32,14 +33,33 @@ class DisplayPreferences:
         self.config = dict(config)
         self.style = config.get('display_style', 'pixel')
         self.applied_style = None
-        self.status = 'queued' if config.get('device_url') else 'preview_only'
+        self.targets = normalize_device_targets(config)
+        has_devices = bool(self.targets)
+        self.status = 'queued' if has_devices else 'preview_only'
+        self.device_statuses = {
+            t["url"]: {
+                "url": t["url"],
+                "name": t.get("name") or t["url"],
+                "style": t["style"],
+                "configured_style": t.get("configured_style"),
+                "status": "queued" if has_devices else "preview_only",
+                "last_seen": None,
+                "last_delivery": None,
+            }
+            for t in self.targets
+        }
         self.lock = threading.Lock()
         self.changed = threading.Event()
 
     def snapshot(self):
         with self.lock:
-            return {'style': self.style, 'applied_style': self.applied_style,
-                    'status': self.status, 'styles': list(STYLES)}
+            return {
+                'style': self.style,
+                'applied_style': self.applied_style,
+                'status': self.status,
+                'styles': list(STYLES),
+                'targets': list(self.device_statuses.values()),
+            }
 
     def set_style(self, style):
         if style not in STYLES:
@@ -49,8 +69,36 @@ class DisplayPreferences:
             write_json(self.path, updated)
             self.config = updated
             self.style = style
-            self.status = 'queued' if self.config.get('device_url') else 'preview_only'
+            for dev in self.device_statuses.values():
+                if not dev.get("configured_style"):
+                    dev["style"] = style
+            self.status = 'queued' if self.targets else 'preview_only'
         self.changed.set()
+
+    def update_target(self, url, status, applied_style=None):
+        with self.lock:
+            if url in self.device_statuses:
+                dev = self.device_statuses[url]
+                dev["status"] = status
+                now = int(time.time())
+                if status in ("ok", "alive", "error"):
+                    dev["last_seen"] = now
+                if status == "ok":
+                    dev["last_delivery"] = now
+                    if applied_style:
+                        dev["style"] = applied_style
+            statuses = [d["status"] for d in self.device_statuses.values()]
+            if not statuses:
+                self.status = "preview_only"
+            elif any(s == "ok" for s in statuses):
+                self.status = "ok"
+                self.applied_style = self.style
+            elif all(s == "offline" for s in statuses):
+                self.status = "offline"
+            elif any(s == "queued" for s in statuses):
+                self.status = "queued"
+            else:
+                self.status = "error"
 
     def delivered(self, style, success):
         with self.lock:
@@ -140,8 +188,9 @@ def main():
     parser = argparse.ArgumentParser(description="TokenTV live account display")
     parser.add_argument("--config", required=True, help="Credential-free account metadata")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--port", type=int, default=8788)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--push", action="store_true", help="Push to device display even with --once")
     parser.add_argument("--output", help="Write a normalized snapshot rather than stdout")
     parser.add_argument("--state-dir", default=".runtime")
     parser.add_argument("--restore-display", action="store_true")
@@ -150,54 +199,85 @@ def main():
     if config.get("font"):
         os.environ["TOKEN_TV_FONT"] = config["font"]
     state_dir = Path(args.state_dir)
-    device = PhotoDisplay(config["device_url"]) if config.get("device_url") else None
+    targets = normalize_device_targets(config)
+    devices = {t["url"]: PhotoDisplay(t["url"]) for t in targets}
     backup_path = state_dir / "display-original.json"
     if args.restore_display:
-        if not device or not backup_path.is_file():
+        restored = 0
+        for target in targets:
+            url = target["url"]
+            host_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', urlparse(url).netloc)
+            dev_backup = state_dir / f"display-original-{host_slug}.json"
+            if not dev_backup.is_file() and backup_path.is_file():
+                dev_backup = backup_path
+            if dev_backup.is_file():
+                devices[url].restore(json.loads(dev_backup.read_text()))
+                restored += 1
+        if not restored:
             parser.error("A display and its original state backup are required")
-        device.restore(json.loads(backup_path.read_text()))
-        print("Original display selection restored.")
+        print(f"Original display selection restored on {restored} display(s).")
         return
     store = UsageStore(config["accounts"])
     preferences = DisplayPreferences(args.config, config)
     interval = max(60, int(config.get("poll_seconds", 300)))
     stopping = threading.Event()
-    original = None
-    active_file = None
-    last_upload = None
+    backups = {}
+    active_files = {}
+    last_uploads = {}
 
     def cycle(refresh=True):
-        nonlocal original, active_file, last_upload
+        nonlocal active_files, last_uploads, backups
         if refresh:
             store.refresh()
         snapshot = store.snapshot()
-        style = preferences.snapshot()['style']
-        if not args.once and device:
-            receipts = []
-            phase = "backup"
-            try:
-                if original is None:
-                    original = json.loads(backup_path.read_text()) if backup_path.is_file() else device.capture()
-                    if not backup_path.is_file():
-                        write_json(backup_path, original)
-                phase = "upload"
-                image = render_page(snapshot, 0, style)
-                name = FILES[1] if image[:4] == b"GIF8" else FILES[0]
-                digest = hashlib.sha256(image).hexdigest()
-                if (name, digest) != last_upload:  # identical frames are not rewritten to flash
-                    (state_dir / name).write_bytes(image)
-                    receipts.append(dict(device.upload(name, image), sha256=digest))
-                    last_upload = (name, digest)
-                if active_file != name:
-                    phase = "activate"
-                    device.activate(original, name)
-                    active_file = name
-                write_json(state_dir / "display-receipt.json", {"at": int(time.time()), "style": style, "uploads": receipts})
-                preferences.delivered(style, True)
-            except (OSError, ValueError, KeyError) as error:
-                write_json(state_dir / "display-receipt.json", {"at": int(time.time()), "style": style, "status": "error", "phase": phase,
-                           "uploads": receipts, "http_status": getattr(error, "code", None)})
-                preferences.delivered(style, False)
+        pref_snap = preferences.snapshot()
+        if (not args.once or args.push) and targets:
+            all_receipts = []
+            for target in targets:
+                url = target["url"]
+                dev = devices[url]
+                target_style = target.get("configured_style") or pref_snap['style']
+                if not dev.is_alive(timeout=2.0):
+                    preferences.update_target(url, "offline")
+                    all_receipts.append({"url": url, "style": target_style, "status": "offline"})
+                    continue
+
+                receipts = []
+                phase = "backup"
+                try:
+                    host_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', urlparse(url).netloc)
+                    dev_backup = state_dir / f"display-original-{host_slug}.json"
+                    orig = backups.get(url)
+                    if orig is None:
+                        if dev_backup.is_file():
+                            orig = json.loads(dev_backup.read_text())
+                        elif backup_path.is_file():
+                            orig = json.loads(backup_path.read_text())
+                        else:
+                            orig = dev.capture()
+                            if orig and not dev_backup.is_file():
+                                write_json(dev_backup, orig)
+                        backups[url] = orig
+
+                    phase = "upload"
+                    image = render_page(snapshot, 0, target_style)
+                    name = FILES[1] if image[:4] == b"GIF8" else FILES[0]
+                    digest = hashlib.sha256(image).hexdigest()
+                    if (name, digest) != last_uploads.get(url):
+                        (state_dir / f"{host_slug}-{name}").write_bytes(image)
+                        receipts.append(dict(dev.upload(name, image), sha256=digest))
+                        last_uploads[url] = (name, digest)
+                    if active_files.get(url) != name:
+                        phase = "activate"
+                        dev.activate(orig, name)
+                        active_files[url] = name
+                    preferences.update_target(url, "ok", applied_style=target_style)
+                    all_receipts.append({"url": url, "style": target_style, "status": "ok", "uploads": receipts})
+                except (OSError, ValueError, KeyError) as error:
+                    preferences.update_target(url, "error")
+                    all_receipts.append({"url": url, "style": target_style, "status": "error", "phase": phase,
+                                         "uploads": receipts, "http_status": getattr(error, "code", None)})
+            write_json(state_dir / "display-receipt.json", {"at": int(time.time()), "devices": all_receipts})
         snapshot['display'] = preferences.snapshot()
         write_json(state_dir / "snapshot.json", snapshot)
         if args.output:
