@@ -24,7 +24,7 @@ class DisplayTests(unittest.TestCase):
             if path == '/v.json':
                 return 200, b'{"m":"GeekMagic SmallTV-PRO","v":"V3.3.75EN"}'
             if path == '/.sys/app.json':
-                return 200, b'{"theme":"3"}'
+                return 200, json.dumps({'theme': '4' if '/set?theme=4' in calls else '3'}).encode()
             if url.path == '/filelist':
                 return 200, ''.join(f'<a href="{file.replace("/image/", "/image//")}">photo</a>' for file in files).encode()
             if url.path == '/delete':
@@ -36,7 +36,8 @@ class DisplayTests(unittest.TestCase):
                 return 200, b'EXACT-JPEG'
             raise HTTPError('http://clock' + path, 404, 'Not found', {}, io.BytesIO())
 
-        with patch.object(display, 'request', side_effect=request):
+        with patch.object(display, 'request', side_effect=request), \
+                patch.object(display, 'is_alive', return_value=True), patch('token_tv.device.time.sleep'):
             original = display.capture()
             self.assertEqual(original, {'device_kind': 'geekmagic_pro', 'theme': 3})
             display.upload('tokentv.jpg', b'EXACT-JPEG')
@@ -44,10 +45,52 @@ class DisplayTests(unittest.TestCase):
             self.assertEqual(files, {'/image/tokentv.jpg'})
             self.assertIn('/set?theme=4', calls)
             self.assertIn('/set?i_i=1&gif_loop=1&autoplay=1', calls)
+            self.assertEqual(calls.count('/set?reboot=1'), 1)
+            display.activate(original)
+            self.assertEqual(calls.count('/set?reboot=1'), 1)
             self.assertIn('/delete?file=%2Fimage%2F%2Fold%20photo.jpg', calls)
             self.assertNotIn('/.sys/album.json', calls)
             display.restore(original)
             self.assertEqual(calls[-1], '/set?theme=3')
+
+    def test_pro_unverified_startup_mode_does_not_reboot(self):
+        display = PhotoDisplay('http://clock')
+        display._kind = 'geekmagic_pro'
+        with patch.object(display, 'image_paths', return_value={'/image/tokentv.jpg': '/image/tokentv.jpg'}), \
+                patch.object(display, 'image_files', return_value={'/image/tokentv.jpg'}), \
+                patch.object(display, 'request', return_value=(200, b'{"theme":"3"}')) as request:
+            with self.assertRaisesRegex(ValueError, 'startup mode'):
+                display.activate({'device_kind': 'geekmagic_pro'})
+            self.assertNotIn('/set?reboot=1', [call.args[0] for call in request.call_args_list])
+
+    def test_pro_offline_after_reboot_is_not_success(self):
+        display = PhotoDisplay('http://clock')
+        display._kind = 'geekmagic_pro'
+        with patch.object(display, 'image_paths', return_value={'/image/tokentv.jpg': '/image/tokentv.jpg'}), \
+                patch.object(display, 'image_files', return_value={'/image/tokentv.jpg'}), \
+                patch.object(display, 'request', return_value=(200, b'{"theme":"4"}')), \
+                patch.object(display, 'is_alive', return_value=False), \
+                patch('token_tv.device.time.sleep'), \
+                patch('token_tv.device.time.monotonic', side_effect=[0, 46]):
+            with self.assertRaisesRegex(ValueError, 'did not return'):
+                display.activate({'device_kind': 'geekmagic_pro'})
+            self.assertFalse(display._pro_started)
+
+    def test_pro_reboot_socket_reset_waits_for_reconnection(self):
+        display = PhotoDisplay('http://clock')
+        display._kind = 'geekmagic_pro'
+        def request(path, data=None, headers=None):
+            if path == '/set?reboot=1':
+                raise ConnectionResetError('reboot')
+            return 200, b'{"theme":"4"}'
+        with patch.object(display, 'image_paths', return_value={'/image/tokentv.jpg': '/image/tokentv.jpg'}), \
+                patch.object(display, 'image_files', return_value={'/image/tokentv.jpg'}), \
+                patch.object(display, 'request', side_effect=request), \
+                patch.object(display, 'is_alive', side_effect=[False, True]) as alive, \
+                patch('token_tv.device.time.sleep'):
+            display.activate({'device_kind': 'geekmagic_pro'})
+            self.assertEqual(alive.call_count, 2)
+            self.assertTrue(display._pro_started)
 
     def test_pro_missing_uploaded_file_prevents_deleting_other_photos(self):
         display = PhotoDisplay('http://clock')

@@ -2,6 +2,7 @@
 import gzip
 import http.client
 import json
+import time
 import uuid
 from html.parser import HTMLParser
 from urllib.error import HTTPError
@@ -53,6 +54,7 @@ class PhotoDisplay:
     def __init__(self, base_url):
         self.base_url = device_address(base_url)
         self._kind = None
+        self._pro_started = False
 
     def request(self, path, data=None, headers=None):
         with urlopen(Request(self.base_url + path, data=data, headers=headers or {}), timeout=20) as response:
@@ -210,6 +212,29 @@ class PhotoDisplay:
             if kind == 'geekmagic_pro':
                 self.change('/set?i_i=1&gif_loop=1&autoplay=1')
                 self.change('/set?theme=4')
+                _, raw = self.request('/.sys/app.json')
+                if str(json.loads(raw).get('theme')) != '4':
+                    raise ValueError('PRO Picture startup mode could not be verified')
+                if not self._pro_started:
+                    # PRO's theme setting selects the boot app, not the live
+                    # app. ENTER/EXIT is a toggle with no readable state, so
+                    # boot into the verified Picture app once per connection.
+                    try:
+                        self.change('/set?reboot=1')
+                    except (ConnectionResetError, http.client.RemoteDisconnected):
+                        # This firmware resets its socket when rebooting.
+                        # Require it to reconnect with Picture mode below.
+                        pass
+                    time.sleep(2)
+                    deadline = time.monotonic() + 45
+                    while not self.is_alive(timeout=1):
+                        if time.monotonic() >= deadline:
+                            raise ValueError('PRO did not return after starting Picture mode')
+                        time.sleep(1)
+                    _, raw = self.request('/.sys/app.json')
+                    if str(json.loads(raw).get('theme')) != '4':
+                        raise ValueError('PRO Picture startup mode changed after reboot')
+                    self._pro_started = True
             else:
                 self.change('/set?i_i=5&autoplay=0')
                 self.change(f'/set?img={selected}')

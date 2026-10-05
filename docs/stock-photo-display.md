@@ -27,8 +27,11 @@ runs TokenTV code, so there is nothing to flash and no firmware to restore.
    file upload: `tokentv.jpg` (kept under 60 KB), or `tokentv.gif` for the animated face.
 4. **Show only that picture.** TokenTV records readable original settings, verifies its uploaded
    file is present, deletes every other album image, and switches to the photo theme.
-   Stock SmallTV-PRO uses Picture theme `4` and a one-image slideshow. PRO uploads are also
-   verified by downloading and comparing their bytes.
+   Stock SmallTV-PRO uses Picture startup theme `4` and a one-image slideshow. Its theme
+   setting changes the boot app, so TokenTV verifies that setting and reboots the PRO once
+   on the first activation after TokenTV starts, then waits for it to reconnect. Later
+   image changes do not reboot it. PRO uploads are verified by downloading and comparing
+   their bytes.
 5. **Restore settings.** A restore command puts readable saved theme/settings back.
    Existing photos are not backed up; deleted photos cannot be restored.
 

@@ -11,7 +11,9 @@ Account and clock configuration changes require a service restart.
 
 The configured displays are `10.0.0.128` (SD_PRO) and `10.0.0.175` (SmallTV-PRO,
 stock V3.3.75EN). Both use the selected HUD face. Firmware is detected automatically;
-the PRO uses Picture theme `4` and a one-image slideshow. TokenTV deletes other album
+the PRO uses Picture startup theme `4` and a one-image slideshow. TokenTV reboots the PRO
+once on first activation after the service starts to launch that app, then waits for it
+to reconnect. TokenTV deletes other album
 images after verifying its uploaded image. Existing photos are not retained or backed up.
 
 Codex uses the existing login in `~/.codex`. Gemini uses the existing
