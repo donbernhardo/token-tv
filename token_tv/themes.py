@@ -769,8 +769,8 @@ def render_hud(snapshot):
         card_h = 100
         row_ys = [29, 134]
     else:
-        card_h = 66
-        row_ys = [28, 97, 166]
+        card_h = 69
+        row_ys = [27, 97, 167]
 
     for index, row in enumerate(rows):
         y = row_ys[index]
@@ -806,8 +806,9 @@ def render_hud(snapshot):
         # Tech corner accents
         cv.draw.line((8, y + 4, 8, y + 12), fill=a, width=2)
         cv.draw.line((8, y + 4, 16, y + 4), fill=a, width=2)
-        cv.draw.line((231, y + card_h - 5, 231, y + card_h - 13), fill=a, width=2)
-        cv.draw.line((231, y + card_h - 5, 223, y + card_h - 5), fill=a, width=2)
+        if card_h >= 90:  # the compact card needs that corner for the weekly reset
+            cv.draw.line((231, y + card_h - 5, 231, y + card_h - 13), fill=a, width=2)
+            cv.draw.line((231, y + card_h - 5, 223, y + card_h - 5), fill=a, width=2)
 
         # Mascot & Clean Model Name (Codex / Gemini)
         place_bot(cv.ink, scanlined(bot_sprite(row['provider'], 19, 17, a)), (11, y + 6, 19, 17))
@@ -884,18 +885,32 @@ def render_hud(snapshot):
                 cv.draw.rectangle((bar_x0 + 1, bar_y0 + 1, bar_x0 + 1 + bar_fill, bar_y1 - 1), fill=wk_band[1])
                 cv.glow.rectangle((bar_x0 + 1, bar_y0 + 1, bar_x0 + 1 + bar_fill, bar_y1 - 1), fill=rgb(wk_band[1]) + (150,))
         else:
-            # Compact 3-row layout
+            # Compact 3-row layout: big 5H reading and gauge, weekly as one bold line (no weekly bar).
             number_5h = number_text(rem_5h)
-            cv.text((12, y + 24), number_5h, chakra(24, True), '#ffffff', glow=glow_rgb + (110,))
+            big = chakra(32, True)
+            base = y + 44
+            cv.text((12, base), number_5h, big, '#ffffff', glow=glow_rgb + (110,), anchor='ls')
+            x_pct = 12 + cv.draw.textlength(number_5h, font=big) + 2
             if rem_5h is not None:
-                x_pct = 12 + cv.draw.textlength(number_5h, font=chakra(24, True)) + 2
-                cv.text((x_pct, y + 31), '%', chakra(12, True), a)
-            cv.text((228, y + 26), 'RST: ' + reset_5h, chakra(12, True), '#ffffff', anchor='ra')
-            gauge_colors = get_hud_band(p, rem_5h)
-            gauge(cv, (12, y + 46, 227, y + 52), rem_5h, gauge_colors, gap=3, shape='skew', skew=4,
+                cv.text((x_pct, base - 1), '%', chakra(16, True), a, glow=glow_rgb + (190,), anchor='ls')
+                x_pct += cv.draw.textlength('%', font=chakra(16, True)) + 4
+            cv.spaced((x_pct, base - 14), '5H', chakra(10, True), '#8fadc6', 1.0, anchor='ls')
+            cv.spaced((x_pct, base - 2), 'LEFT', chakra(8, True), '#6c8aa5', 1.0, anchor='ls')
+            cv.text((228, base - 1), reset_5h, chakra(20, True), '#ffffff', glow=glow_rgb + (100,), anchor='rs')
+            gauge(cv, (12, y + 48, 227, y + 54), rem_5h, get_hud_band(p, rem_5h), gap=3, shape='skew', skew=4,
                   track='#0c1c2b', empty='#22476a', stale=old, glow=True)
-            wk_text = (number_text(rem_wk) + '%') if rem_wk is not None else '--'
-            cv.text((12, y + 54), f'WK: {wk_text} LEFT · {reset_wk}', chakra(9, True), '#ffffff')
+            week = chakra(15, True)
+            number_wk = number_text(rem_wk)
+            cv.spaced((12, y + 66), 'WEEK', chakra(9, True), '#8fadc6', 1.0, anchor='ls')
+            cv.text((50, y + 66), number_wk, week, '#ffffff', anchor='ls')
+            bar_x0 = 50 + cv.draw.textlength(number_wk, font=week) + 8
+            if rem_wk is not None:
+                cv.text((bar_x0 - 7, y + 66), '%', chakra(10, True), a, anchor='ls')
+                bar_x0 += cv.draw.textlength('%', font=chakra(10, True)) + 3
+            cv.text((228, y + 66), reset_wk, week, '#ffffff', anchor='rs')
+            bar_x1 = 228 - cv.draw.textlength(reset_wk, font=week) - 9
+            gauge(cv, (round(bar_x0), y + 57, round(bar_x1), y + 62), rem_wk, get_hud_band(p, rem_wk), gap=2, shape='skew',
+                  skew=2, track='#0c1c2b', empty='#22476a', stale=old, glow=True)
 
     return cv.finish(blur=2)
 
