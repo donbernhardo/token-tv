@@ -7,12 +7,12 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/token-tv
+WorkingDirectory=/root/proj/ai/token-tv
 Environment=HOME=/root
-Environment=PATH=/root/token-tv/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=/root/proj/ai/token-tv/.venv/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/root/token-tv/.venv/bin/token-tv run --config /root/.config/token-tv/config.json --host 192.168.2.240 --port 8788 --state-dir /var/lib/token-tv
+ExecStart=/root/proj/ai/token-tv/.venv/bin/token-tv run --config /root/.config/token-tv/config.json --host 192.168.2.240 --port 8788 --state-dir /var/lib/token-tv
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=20

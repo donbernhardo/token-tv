@@ -1,6 +1,6 @@
 # Service on this machine
 
-The Python environment is `/root/token-tv/.venv`. The installed systemd unit
+The Python environment is `/root/proj/ai/token-tv/.venv`. The installed systemd unit
 is `/etc/systemd/system/token-tv.service`; its source is
 `deploy/token-tv.service`. It runs as root to use the existing CLI logins in
 root's home directory. The dashboard binds to `192.168.2.240:8788`.
@@ -29,7 +29,7 @@ The repository workspace has been trusted in agy for this startup check.
 If no account configuration exists yet, create it with the actual account email:
 
 ```bash
-/root/token-tv/.venv/bin/token-tv setup --yes --codex-email YOUR_CHATGPT_EMAIL
+/root/proj/ai/token-tv/.venv/bin/token-tv setup --yes --codex-email YOUR_CHATGPT_EMAIL
 ```
 
 Use `--claude-email`, `--grok-email`, or `--gemini-email` for other providers.
@@ -50,7 +50,7 @@ readings only after the configured account has a working CLI login.
 After editing the unit source, reinstall and reload it:
 
 ```bash
-install -m 0644 /root/token-tv/deploy/token-tv.service /etc/systemd/system/token-tv.service
+install -m 0644 /root/proj/ai/token-tv/deploy/token-tv.service /etc/systemd/system/token-tv.service
 systemctl daemon-reload
 systemctl restart token-tv.service
 ```
