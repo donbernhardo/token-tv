@@ -46,6 +46,12 @@ def scoped_env(provider, root):
                 "GEMINI_API_KEY", "GOOGLE_API_KEY"):
         env.pop(key, None)
     variable = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "grok": "GROK_HOME", "gemini": "GEMINI_HOME"}[provider]
+    if provider == "claude" and Path(root).expanduser() == Path("~/.claude").expanduser():
+        # Default home: with CLAUDE_CONFIG_DIR set, Claude Code looks for ~/.claude/.claude.json
+        # instead of ~/.claude.json and starts a second, empty config.
+        env.pop(variable, None)
+        env.pop("CLAUDE_SECURESTORAGE_CONFIG_DIR", None)
+        return env
     env[variable] = str(root)
     if provider == "claude":
         env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = str(root)

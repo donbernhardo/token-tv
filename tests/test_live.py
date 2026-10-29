@@ -59,6 +59,12 @@ class LiveTests(unittest.TestCase):
                 self.assertEqual(env[variable], "/explicit/account/home")
                 self.assertFalse(any(key in env for key in ("OPENAI_API_KEY", "GROK_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "GEMINI_API_KEY")))
 
+    def test_default_claude_home_keeps_claude_code_default_config(self):
+        with patch.dict("os.environ", {"CLAUDE_CONFIG_DIR": "/elsewhere"}):
+            env = scoped_env("claude", Path("~/.claude").expanduser())
+        self.assertNotIn("CLAUDE_CONFIG_DIR", env)
+        self.assertNotIn("CLAUDE_SECURESTORAGE_CONFIG_DIR", env)
+
     def test_codex_uses_reported_window_duration(self):
         data = {"rateLimits": {"primary": {"usedPercent": 78, "windowDurationMins": 10080, "resetsAt": 2000000000}, "secondary": None}}
         self.assertEqual(normalize_codex(data), [{"label": "WEEK", "used_percent": 78.0, "resets_at": 2000000000, "duration_minutes": 10080}])
